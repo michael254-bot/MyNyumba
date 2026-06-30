@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="MyNyumba – Find your next home across all 47 counties in Kenya. Verified landlords, real listings, pay Ksh 500 to unlock contact." />
+  <title>MyNyumba – Find Houses Across Kenya</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.10.0/tabler-icons.min.css" />
+  <link rel="stylesheet" href="/static/css/main.css" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='28'>🏠</text></svg>" />
+</head>
+<body>
+
+  <!-- NAV -->
+  <header class="nav" id="main-nav">
+    <div class="nav-inner">
+      <a href="#" class="logo" onclick="Router.go('home');return false;">
+        My<span>Nyumba</span>
+      </a>
+      <button class="burger" id="burger-btn" aria-label="Toggle menu">
+        <i class="ti ti-menu-2"></i>
+      </button>
+      <nav class="nav-links" id="nav-links">
+        <a href="#" onclick="Router.go('home');closeMobileMenu();return false;">Home</a>
+        <a href="#" onclick="Router.go('browse');closeMobileMenu();return false;">Browse</a>
+        <a href="#" onclick="Router.go('counties');closeMobileMenu();return false;">Counties</a>
+        <a href="#" onclick="Router.go('how');closeMobileMenu();return false;">How it works</a>
+      </nav>
+      <div class="nav-auth" id="nav-auth">
+        <button class="btn-outline" onclick="openModal('login-modal')">Log in</button>
+        <button class="btn-primary" onclick="openModal('register-modal')">Sign up</button>
+      </div>
+      <div class="nav-user hidden" id="nav-user">
+        <div class="user-menu-wrap">
+          <button class="user-pill" id="user-pill-btn">
+            <span class="user-avatar" id="nav-avatar">J</span>
+            <span id="nav-username">James</span>
+            <i class="ti ti-chevron-down"></i>
+          </button>
+          <div class="user-dropdown" id="user-dropdown">
+            <a href="#" onclick="Router.go('dashboard');closeUserMenu();return false;"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
+            <a href="#" onclick="Router.go('unlocks');closeUserMenu();return false;"><i class="ti ti-key"></i> My unlocked houses</a>
+            <a href="#" onclick="Router.go('profile');closeUserMenu();return false;"><i class="ti ti-user"></i> Profile</a>
+            <hr/>
+            <a href="#" onclick="Auth.logout();return false;" class="logout-link"><i class="ti ti-logout"></i> Log out</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- PAGE CONTAINER -->
+  <main id="app"></main>
+
+  <!-- TOAST -->
+  <div id="toast-container"></div>
+
+  <!-- MODAL OVERLAY -->
+  <div class="modal-overlay hidden" id="modal-overlay" onclick="closeAllModals()"></div>
+
+  <!-- LOGIN MODAL -->
+  <div class="modal hidden" id="login-modal" role="dialog" aria-modal="true" aria-labelledby="login-title">
+    <div class="modal-header">
+      <h2 id="login-title">Welcome back</h2>
+      <button class="modal-close" onclick="closeModal('login-modal')" aria-label="Close"><i class="ti ti-x"></i></button>
+    </div>
+    <p class="modal-sub">Log in to your MyNyumba account</p>
+    <form id="login-form" onsubmit="Auth.login(event)">
+      <div class="form-group">
+        <label for="login-email">Email address</label>
+        <input type="email" id="login-email" placeholder="you@email.com" required autocomplete="email"/>
+      </div>
+      <div class="form-group">
+        <label for="login-password">Password</label>
+        <div class="input-icon-wrap">
+          <input type="password" id="login-password" placeholder="Your password" required autocomplete="current-password"/>
+          <button type="button" class="toggle-pw" onclick="togglePassword('login-password',this)" aria-label="Show password"><i class="ti ti-eye"></i></button>
+        </div>
+      </div>
+      <div id="login-error" class="form-error hidden"></div>
+      <button type="submit" class="btn-primary btn-block" id="login-submit">Log in</button>
+    </form>
+    <p class="modal-switch">Don't have an account? <a href="#" onclick="switchModal('login-modal','register-modal');return false;">Sign up</a></p>
+  </div>
+
+  <!-- REGISTER MODAL -->
+  <div class="modal hidden" id="register-modal" role="dialog" aria-modal="true" aria-labelledby="register-title">
+    <div class="modal-header">
+      <h2 id="register-title">Create account</h2>
+      <button class="modal-close" onclick="closeModal('register-modal')" aria-label="Close"><i class="ti ti-x"></i></button>
+    </div>
+    <p class="modal-sub">Join MyNyumba — it's free</p>
+    <form id="register-form" onsubmit="Auth.register(event)">
+      <div class="form-group">
+        <label for="reg-name">Full name</label>
+        <input type="text" id="reg-name" placeholder="John Kamau" required autocomplete="name"/>
+      </div>
+      <div class="form-group">
+        <label for="reg-email">Email address</label>
+        <input type="email" id="reg-email" placeholder="you@email.com" required autocomplete="email"/>
+      </div>
+      <div class="form-group">
+        <label for="reg-phone">Phone number (M-Pesa)</label>
+        <input type="tel" id="reg-phone" placeholder="07XX XXX XXX" autocomplete="tel"/>
+      </div>
+      <div class="form-group">
+        <label for="reg-password">Password</label>
+        <div class="input-icon-wrap">
+          <input type="password" id="reg-password" placeholder="Min 6 characters" required autocomplete="new-password"/>
+          <button type="button" class="toggle-pw" onclick="togglePassword('reg-password',this)" aria-label="Show password"><i class="ti ti-eye"></i></button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>I am a</label>
+        <div class="role-toggle">
+          <button type="button" class="role-btn active" data-role="tenant" onclick="selectRole(this)">
+            <i class="ti ti-user"></i> Tenant
+          </button>
+          <button type="button" class="role-btn" data-role="landlord" onclick="selectRole(this)">
+            <i class="ti ti-key"></i> Landlord
+          </button>
+        </div>
+        <input type="hidden" id="reg-role" value="tenant"/>
+      </div>
+      <div id="register-error" class="form-error hidden"></div>
+      <button type="submit" class="btn-primary btn-block" id="register-submit">Create account</button>
+    </form>
+    <p class="modal-switch">Already have an account? <a href="#" onclick="switchModal('register-modal','login-modal');return false;">Log in</a></p>
+  </div>
+
+  <!-- UNLOCK MODAL -->
+  <div class="modal hidden" id="unlock-modal" role="dialog" aria-modal="true" aria-labelledby="unlock-title">
+    <div class="modal-header">
+      <h2 id="unlock-title">Unlock landlord contact</h2>
+      <button class="modal-close" onclick="closeModal('unlock-modal')" aria-label="Close"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="unlock-info">
+      <div class="unlock-icon"><i class="ti ti-device-mobile"></i></div>
+      <p>You'll get the landlord's phone number and WhatsApp. Pay once per listing.</p>
+    </div>
+    <div class="mpesa-amount-box">
+      <p>Amount</p>
+      <strong>Ksh 500</strong>
+      <small id="unlock-listing-name">House listing</small>
+    </div>
+    <div class="form-group">
+      <label for="mpesa-phone">M-Pesa phone number</label>
+      <input type="tel" id="mpesa-phone" placeholder="07XX XXX XXX" />
+    </div>
+    <div id="unlock-error" class="form-error hidden"></div>
+    <div id="unlock-success" class="form-success hidden"></div>
+    <div class="modal-footer-btns">
+      <button class="btn-outline" onclick="closeModal('unlock-modal')">Cancel</button>
+      <button class="btn-primary" id="unlock-submit-btn" onclick="Unlock.initiate()">
+        <i class="ti ti-device-mobile-dollar"></i> Send M-Pesa STK Push
+      </button>
+    </div>
+    <p class="modal-note"><i class="ti ti-shield-check"></i> Secure · Instant unlock · No hidden charges</p>
+  </div>
+
+  <!-- REVIEW MODAL -->
+  <div class="modal hidden" id="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
+    <div class="modal-header">
+      <h2 id="review-title">Leave a review</h2>
+      <button class="modal-close" onclick="closeModal('review-modal')" aria-label="Close"><i class="ti ti-x"></i></button>
+    </div>
+    <form id="review-form" onsubmit="Reviews.submit(event)">
+      <div class="form-group">
+        <label>Your rating</label>
+        <div class="star-input" id="star-input">
+          <button type="button" data-val="1" onclick="setRating(1)">★</button>
+          <button type="button" data-val="2" onclick="setRating(2)">★</button>
+          <button type="button" data-val="3" onclick="setRating(3)">★</button>
+          <button type="button" data-val="4" onclick="setRating(4)">★</button>
+          <button type="button" data-val="5" onclick="setRating(5)">★</button>
+        </div>
+        <input type="hidden" id="review-rating" value="0"/>
+      </div>
+      <div class="form-group">
+        <label for="review-comment">Comment (optional)</label>
+        <textarea id="review-comment" placeholder="Describe your experience with this listing…" rows="3"></textarea>
+      </div>
+      <div id="review-error" class="form-error hidden"></div>
+      <button type="submit" class="btn-primary btn-block">Submit review</button>
+    </form>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/auth.js"></script>
+  <script src="/static/js/ui.js"></script>
+  <script src="/static/js/pages.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
