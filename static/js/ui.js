@@ -1,11 +1,9 @@
-/* ui.js — Shared UI utilities, Router, Modal/Toast system */
+/* ui.js — Shared UI utilities, Router, Modal, Toast */
 
-/* ── Helpers ──────────────────────────────────────── */
+/* ── Helpers ─────────────────────────────────────── */
 function el(id) { return document.getElementById(id); }
-function showEl(e) { if (e) e.classList.remove('hidden'); }
-function hideEl(e) { if (e) e.classList.add('hidden'); }
-function showElQ(sel) { document.querySelectorAll(sel).forEach(e => e.classList.remove('hidden')); }
-function hideElQ(sel) { document.querySelectorAll(sel).forEach(e => e.classList.add('hidden')); }
+function showEl(e)  { if (e) e.classList.remove('hidden'); }
+function hideEl(e)  { if (e) e.classList.add('hidden'); }
 
 function setLoading(btn, loading) {
   if (!btn) return;
@@ -25,32 +23,34 @@ function formatPrice(n) {
 
 function typeLabel(t) {
   const map = {
-    bedsitter: 'Bedsitter', studio: 'Studio',
-    '1_bedroom': '1 Bedroom', '2_bedroom': '2 Bedroom',
-    '3_bedroom': '3 Bedroom', '4_bedroom': '4 Bedroom',
-    bungalow: 'Bungalow', maisonette: 'Maisonette',
-    townhouse: 'Townhouse', apartment: 'Apartment'
+    bedsitter:'Bedsitter', studio:'Studio', '1_bedroom':'1 Bedroom',
+    '2_bedroom':'2 Bedroom', '3_bedroom':'3 Bedroom', '4_bedroom':'4 Bedroom',
+    bungalow:'Bungalow', maisonette:'Maisonette', townhouse:'Townhouse', apartment:'Apartment'
   };
   return map[t] || t;
 }
 
-function stars(n, count) {
+function starsHtml(n, count) {
   const filled = Math.round(n);
   const s = '★'.repeat(filled) + '☆'.repeat(5 - filled);
-  return `<span style="color:#EF9F27">${s}</span> <span class="text-muted text-xs">${Number(n).toFixed(1)} (${count})</span>`;
+  return `<span style="color:#EF9F27">${s}</span> <span class="text-muted text-xs">${Number(n).toFixed(1)} (${count} review${count !== 1 ? 's' : ''})</span>`;
 }
 
 function timeAgo(dateStr) {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const d = Math.floor(diff / 86400000);
+  if (!dateStr) return '';
+  const d = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
   if (d === 0) return 'Today';
   if (d === 1) return 'Yesterday';
-  if (d < 7) return `${d} days ago`;
-  if (d < 30) return `${Math.floor(d/7)} weeks ago`;
-  return `${Math.floor(d/30)} months ago`;
+  if (d < 7)  return `${d} days ago`;
+  if (d < 30) return `${Math.floor(d / 7)} weeks ago`;
+  return `${Math.floor(d / 30)} months ago`;
 }
 
-/* ── Toast ─────────────────────────────────────────── */
+function escHtml(s) {
+  return String(s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+/* ── Toast ───────────────────────────────────────── */
 function showToast(msg, type = 'info') {
   const icons = { success: 'ti-circle-check', error: 'ti-alert-circle', info: 'ti-info-circle' };
   const t = document.createElement('div');
@@ -60,44 +60,30 @@ function showToast(msg, type = 'info') {
   setTimeout(() => t.remove(), 4000);
 }
 
-/* ── Modal ─────────────────────────────────────────── */
+/* ── Modal ───────────────────────────────────────── */
 function openModal(id) {
   closeAllModals();
-  showEl(el(id));
-  showEl(el('modal-overlay'));
-  document.body.style.overflow = 'hidden';
+  const m = el(id);
+  if (m) { showEl(m); showEl(el('modal-overlay')); document.body.style.overflow = 'hidden'; }
 }
-
 function closeModal(id) {
-  hideEl(el(id));
-  // only hide overlay if no other modal open
+  const m = el(id);
+  if (m) hideEl(m);
   const anyOpen = document.querySelectorAll('.modal:not(.hidden)').length > 0;
-  if (!anyOpen) {
-    hideEl(el('modal-overlay'));
-    document.body.style.overflow = '';
-  }
+  if (!anyOpen) { hideEl(el('modal-overlay')); document.body.style.overflow = ''; }
 }
-
 function closeAllModals() {
   document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
   hideEl(el('modal-overlay'));
   document.body.style.overflow = '';
 }
-
-function switchModal(from, to) {
-  closeModal(from);
-  openModal(to);
-}
+function switchModal(from, to) { closeModal(from); openModal(to); }
 
 function togglePassword(inputId, btn) {
   const inp = el(inputId);
-  if (inp.type === 'password') {
-    inp.type = 'text';
-    btn.innerHTML = '<i class="ti ti-eye-off"></i>';
-  } else {
-    inp.type = 'password';
-    btn.innerHTML = '<i class="ti ti-eye"></i>';
-  }
+  if (!inp) return;
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  btn.querySelector('i').className = inp.type === 'password' ? 'ti ti-eye' : 'ti ti-eye-off';
 }
 
 function selectRole(btn) {
@@ -106,33 +92,47 @@ function selectRole(btn) {
   el('reg-role').value = btn.dataset.role;
 }
 
-/* ── User dropdown ─────────────────────────────────── */
-el('user-pill-btn') && el('user-pill-btn').addEventListener('click', (e) => {
-  e.stopPropagation();
-  el('user-dropdown').classList.toggle('open');
-});
-document.addEventListener('click', () => {
-  el('user-dropdown') && el('user-dropdown').classList.remove('open');
-});
-function closeUserMenu() {
-  el('user-dropdown') && el('user-dropdown').classList.remove('open');
-}
-
-/* ── Mobile nav ────────────────────────────────────── */
-el('burger-btn') && el('burger-btn').addEventListener('click', () => {
+/* ── Mobile nav ──────────────────────────────────── */
+function toggleMobileMenu() {
   const links = el('nav-links');
-  links.classList.toggle('open');
-  const icon = el('burger-btn').querySelector('i');
-  icon.className = links.classList.contains('open') ? 'ti ti-x' : 'ti ti-menu-2';
-});
+  const icon  = el('burger-icon');
+  if (!links) return;
+  const open = links.classList.toggle('open');
+  if (icon) icon.className = open ? 'ti ti-x' : 'ti ti-menu-2';
+}
 function closeMobileMenu() {
   const links = el('nav-links');
-  links && links.classList.remove('open');
-  const icon = el('burger-btn') && el('burger-btn').querySelector('i');
-  if (icon) icon.className = 'ti ti-menu-2';
+  const icon  = el('burger-icon');
+  if (links) links.classList.remove('open');
+  if (icon)  icon.className = 'ti ti-menu-2';
 }
+// Close menu on outside tap
+document.addEventListener('click', e => {
+  const nav    = el('main-nav');
+  const burger = el('burger-btn');
+  if (nav && !nav.contains(e.target)) closeMobileMenu();
+});
 
-/* ── Star rating ────────────────────────────────────── */
+/* ── User dropdown ───────────────────────────────── */
+function toggleUserMenu(e) {
+  e.stopPropagation();
+  const dd = el('user-dropdown');
+  if (dd) dd.classList.toggle('open');
+  const ch = el('nav-chevron');
+  if (ch) ch.style.transform = (dd && dd.classList.contains('open')) ? 'rotate(180deg)' : '';
+}
+function closeUserMenu() {
+  const dd = el('user-dropdown');
+  if (dd) dd.classList.remove('open');
+  const ch = el('nav-chevron');
+  if (ch) ch.style.transform = '';
+}
+document.addEventListener('click', e => {
+  const wrap = document.querySelector('.user-menu-wrap');
+  if (wrap && !wrap.contains(e.target)) closeUserMenu();
+});
+
+/* ── Star rating ─────────────────────────────────── */
 function setRating(val) {
   el('review-rating').value = val;
   el('star-input').querySelectorAll('button').forEach((b, i) => {
@@ -140,53 +140,56 @@ function setRating(val) {
   });
 }
 
-/* ── Router ─────────────────────────────────────────── */
+/* ── Active nav link highlight ───────────────────── */
+function setActiveNav(route) {
+  const map = { home:'nl-home', browse:'nl-browse', counties:'nl-counties', how:'nl-how' };
+  document.querySelectorAll('.nav-links > a').forEach(a => a.classList.remove('active'));
+  const id = map[route];
+  if (id) { const a = el(id); if (a) a.classList.add('active'); }
+}
+
+/* ── Router ──────────────────────────────────────── */
 const Router = (() => {
-  let currentRoute = 'home';
+  let currentRoute  = 'home';
   let currentParams = {};
 
   const routes = {
-    home:       () => Pages.home(),
-    browse:     () => Pages.browse(currentParams),
-    counties:   () => Pages.counties(),
-    listing:    () => Pages.listing(currentParams.id),
-    dashboard:  () => Pages.dashboard(),
-    unlocks:    () => Pages.unlocks(),
-    profile:    () => Pages.profile(),
-    how:        () => Pages.scrollToHow(),
-    'add-listing': () => Pages.addListing(),
+    home:           () => Pages.home(),
+    browse:         () => Pages.browse(currentParams),
+    counties:       () => Pages.counties(),
+    listing:        () => Pages.listing(currentParams.id),
+    dashboard:      () => Pages.dashboard(),
+    'add-listing':  () => Pages.addListing(),
     'edit-listing': () => Pages.editListing(currentParams.id),
+    unlocks:        () => Pages.unlocks(),
+    profile:        () => Pages.profile(),
+    admin:          () => Pages.admin(),
+    how:            () => Pages.scrollToHow(),
   };
 
   function go(route, params = {}) {
-    currentRoute = route;
+    currentRoute  = route;
     currentParams = params;
     window.scrollTo(0, 0);
     closeMobileMenu();
-    // Update active nav link
-    document.querySelectorAll('.nav-links a').forEach(a => {
-      a.classList.toggle('active', a.textContent.trim().toLowerCase() === route);
-    });
+    closeUserMenu();
+    setActiveNav(route);
     render();
   }
 
-  function refresh() {
-    render();
-  }
+  function refresh() { render(); }
 
   function render() {
     const fn = routes[currentRoute];
-    if (fn) fn();
-    else Pages.home();
+    if (fn) fn(); else Pages.home();
   }
 
   return { go, refresh, current: () => currentRoute, params: () => currentParams };
 })();
 
-/* ── Unlock module ─────────────────────────────────── */
+/* ── Unlock module ───────────────────────────────── */
 const Unlock = (() => {
   let _listingId = null;
-  let _listingTitle = '';
 
   function open(listingId, title) {
     const user = Auth.current();
@@ -196,37 +199,33 @@ const Unlock = (() => {
       return;
     }
     _listingId = listingId;
-    _listingTitle = title;
-
-    // Pre-fill phone from profile
-    const phone = user.phone || '';
-    el('mpesa-phone').value = phone;
-    el('unlock-listing-name').textContent = title;
+    if (el('mpesa-phone')) el('mpesa-phone').value = user.phone || '';
+    if (el('unlock-listing-name')) el('unlock-listing-name').textContent = title || 'House listing';
     hideEl(el('unlock-error'));
     hideEl(el('unlock-success'));
+    const btn = el('unlock-submit-btn');
+    if (btn) { showEl(btn); btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-mobile-dollar"></i> Send M-Pesa Push'; }
     openModal('unlock-modal');
   }
 
   async function initiate() {
-    const btn = el('unlock-submit-btn');
+    const btn   = el('unlock-submit-btn');
     const errEl = el('unlock-error');
     const sucEl = el('unlock-success');
-    const phone = el('mpesa-phone').value.trim();
+    const phone = (el('mpesa-phone') || {}).value || '';
 
-    if (!phone) { showEl(errEl); errEl.textContent = 'Enter your M-Pesa phone number.'; return; }
+    if (!phone.trim()) { showEl(errEl); errEl.textContent = 'Enter your M-Pesa phone number.'; return; }
 
-    hideEl(errEl);
-    hideEl(sucEl);
+    hideEl(errEl); hideEl(sucEl);
     setLoading(btn, true);
 
-    const r = await API.initiateUnlock(_listingId, phone);
+    const r = await API.initiateUnlock(_listingId, phone.trim());
     setLoading(btn, false);
 
     if (r.ok) {
       showEl(sucEl);
       sucEl.textContent = r.data.message || 'STK Push sent! Enter your M-Pesa PIN on your phone.';
       hideEl(btn);
-      // Poll for completion
       pollUnlock(_listingId);
     } else if (r.data.already_unlocked) {
       closeModal('unlock-modal');
@@ -251,10 +250,10 @@ const Unlock = (() => {
         clearInterval(interval);
         const errEl = el('unlock-error');
         const sucEl = el('unlock-success');
-        showEl(errEl);
+        if (errEl) { showEl(errEl); errEl.textContent = 'Payment not confirmed. If you paid, contact support.'; }
         hideEl(sucEl);
-        errEl.textContent = 'Payment not confirmed. If you paid, please contact support.';
-        showEl(el('unlock-submit-btn'));
+        const btn = el('unlock-submit-btn');
+        if (btn) showEl(btn);
       }
     }, 3000);
   }
@@ -262,7 +261,7 @@ const Unlock = (() => {
   return { open, initiate };
 })();
 
-/* ── Reviews module ─────────────────────────────────── */
+/* ── Reviews module ──────────────────────────────── */
 const Reviews = (() => {
   let _listingId = null;
 
@@ -271,28 +270,25 @@ const Reviews = (() => {
     if (!user) { showToast('Please log in to leave a review.', 'info'); openModal('login-modal'); return; }
     _listingId = listingId;
     setRating(0);
-    el('review-comment').value = '';
+    if (el('review-comment')) el('review-comment').value = '';
     hideEl(el('review-error'));
     openModal('review-modal');
   }
 
   async function submit(e) {
     e.preventDefault();
-    const rating = parseInt(el('review-rating').value);
-    const comment = el('review-comment').value.trim();
-    const errEl = el('review-error');
-
+    const rating  = parseInt((el('review-rating') || {}).value || 0);
+    const comment = (el('review-comment') || {}).value.trim();
+    const errEl   = el('review-error');
     if (!rating) { showEl(errEl); errEl.textContent = 'Please select a rating.'; return; }
-
     const btn = e.submitter;
     setLoading(btn, true);
     const r = await API.addReview(_listingId, { rating, comment });
     setLoading(btn, false);
-
     if (r.ok) {
       closeAllModals();
       showToast('Review submitted. Thank you!', 'success');
-      Router.refresh();
+      Router.go('listing', { id: _listingId });
     } else {
       showEl(errEl);
       errEl.textContent = r.data.error || 'Failed to submit review.';
