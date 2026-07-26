@@ -393,15 +393,19 @@ def create_listing(user):
     return jsonify({"listing_id":str(result["id"]),"message":"Listing created"}), 201
 
 @app.route("/api/listings/<listing_id>", methods=["PUT"])
-@require_landlord
+@require_auth
 def update_listing(user, listing_id):
     data = request.json
+    p    = get_profile(user.id)
+    if not p: return jsonify({"error":"Profile not found"}), 403
+    is_admin = (user.email == ADMIN_EMAIL or p["role"] == "admin")
+
     conn = get_db(); cur = conn.cursor()
-    # Admin can edit any listing, landlord only their own
-    p = get_profile(user.id)
-    if p["role"] == "admin":
+    if is_admin:
         cur.execute("SELECT id FROM listings WHERE id=%s", (listing_id,))
     else:
+        if p["role"] not in ("landlord",):
+            conn.close(); return jsonify({"error":"Not authorized"}), 403
         cur.execute("SELECT id FROM listings WHERE id=%s AND landlord_id=%s", (listing_id, str(user.id)))
     if not cur.fetchone(): conn.close(); return jsonify({"error":"Not found"}), 404
 
@@ -422,9 +426,10 @@ def update_listing(user, listing_id):
 @app.route("/api/listings/<listing_id>", methods=["DELETE"])
 @require_auth
 def delete_listing(user, listing_id):
+    p        = get_profile(user.id)
+    is_admin = (user.email == ADMIN_EMAIL or (p and p["role"] == "admin"))
     conn = get_db(); cur = conn.cursor()
-    p = get_profile(user.id)
-    if p and p["role"] == "admin":
+    if is_admin:
         cur.execute("DELETE FROM listings WHERE id=%s RETURNING id", (listing_id,))
     else:
         cur.execute("DELETE FROM listings WHERE id=%s AND landlord_id=%s RETURNING id",
@@ -486,7 +491,9 @@ def admin_landlords(user):
         SELECT p.*, au.email,
                COUNT(l.id) AS listing_count,
                COALESCE(SUM(l.views),0) AS total_views,
-               COALESCE(SUM(l.unlock_count),0) AS total_unlocks
+               COALESCE(SUM(l.unlock_count),0) AS total_unlocks,
+               COUNT(l.id) FILTER (WHERE l.status='active') AS active_listings,
+               COUNT(l.id) FILTER (WHERE l.status='inactive') AS inactive_listings
         FROM profiles p
         JOIN auth.users au ON au.id=p.id
         LEFT JOIN listings l ON l.landlord_id=p.id
@@ -496,6 +503,56 @@ def admin_landlords(user):
     """)
     landlords = cur.fetchall(); conn.close()
     return jsonify([dict(l) for l in landlords]), 200
+
+@app.route("/api/admin/landlords/<landlord_id>")
+@require_admin
+def admin_landlord_detail(user, landlord_id):
+    """Get one landlord's profile + all their listings"""
+    conn = get_db(); cur = conn.cursor()
+    # Profile
+    cur.execute("""
+        SELECT p.*, au.email
+        FROM profiles p
+        JOIN auth.users au ON au.id=p.id
+        WHERE p.id=%s
+    """, (landlord_id,))
+    profile = cur.fetchone()
+    if not profile: conn.close(); return jsonify({"error":"Landlord not found"}), 404
+    # All their listings (all statuses)
+    cur.execute("""
+        SELECT l.*, c.name AS county_name, c.slug AS county_slug,
+               a.name AS area_name,
+               (SELECT COUNT(*) FROM listing_media WHERE listing_id=l.id AND media_type='photo') AS photo_count,
+               (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo
+        FROM listings l
+        JOIN counties c ON c.id=l.county_id
+        LEFT JOIN areas a ON a.id=l.area_id
+        WHERE l.landlord_id=%s
+        ORDER BY l.created_at DESC
+    """, (landlord_id,))
+    listings = cur.fetchall()
+    conn.close()
+    return jsonify({"profile": dict(profile), "listings": [dict(l) for l in listings]}), 200
+
+@app.route("/api/admin/landlords/<landlord_id>/suspend", methods=["POST"])
+@require_admin
+def admin_suspend_landlord(user, landlord_id):
+    """Suspend landlord — deactivates all their listings"""
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("UPDATE listings SET status='inactive' WHERE landlord_id=%s RETURNING id", (landlord_id,))
+    count = len(cur.fetchall())
+    conn.commit(); conn.close()
+    return jsonify({"message": f"Suspended landlord. {count} listings deactivated."}), 200
+
+@app.route("/api/admin/landlords/<landlord_id>/restore", methods=["POST"])
+@require_admin
+def admin_restore_landlord(user, landlord_id):
+    """Restore landlord — reactivates all their listings"""
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("UPDATE listings SET status='active' WHERE landlord_id=%s RETURNING id", (landlord_id,))
+    count = len(cur.fetchall())
+    conn.commit(); conn.close()
+    return jsonify({"message": f"Restored landlord. {count} listings reactivated."}), 200
 
 @app.route("/api/admin/stats")
 @require_admin
@@ -708,5 +765,4 @@ def not_found(e): return render_template("index.html"), 200
 def server_error(e): return jsonify({"error":"Internal server error"}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(debug=True, port=5000)

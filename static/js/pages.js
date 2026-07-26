@@ -1005,6 +1005,130 @@ const Pages = (() => {
   }
 
   /* ══════════════════════════════════════════════
+     ADMIN — LANDLORD DETAIL VIEW
+  ══════════════════════════════════════════════ */
+  async function adminLandlord(landlordId) {
+    const user = Auth.current();
+    if (!user || !user.is_admin) { Router.go('home'); return; }
+    loading();
+    const r = await API.adminLandlordDetail(landlordId);
+    if (!r.ok) { showToast('Failed to load landlord.', 'error'); Router.go('admin'); return; }
+    const { profile: lp, listings } = r.data;
+
+    const initial    = (lp.full_name || lp.email || 'L').charAt(0).toUpperCase();
+    const totalViews = listings.reduce((s, l) => s + (l.views || 0), 0);
+    const totalUnlocks = listings.reduce((s, l) => s + (l.unlock_count || 0), 0);
+    const activeCount = listings.filter(l => l.status === 'active').length;
+
+    function listingRows() {
+      if (listings.length === 0) {
+        return '<p style="font-size:13px;color:var(--text-3);padding:20px 0;text-align:center">This landlord has no listings yet.</p>';
+      }
+      return listings.map(function(l) {
+        var area       = l.area_name ? ' · ' + escHtml(l.area_name) : '';
+        var statusCls  = 'status-badge status-' + l.status;
+        var imgHtml    = l.cover_photo
+          ? '<img src="' + l.cover_photo + '" style="width:100%;height:100%;object-fit:cover" alt="cover"/>'
+          : '<i class="ti ti-building" style="font-size:20px;color:var(--orange)"></i>';
+        return '<div class="listing-row" style="flex-wrap:wrap">'
+          + '<div class="lr-thumb">' + imgHtml + '</div>'
+          + '<div class="lr-info" style="flex:1;min-width:160px">'
+          +   '<h4>' + escHtml(l.title) + '</h4>'
+          +   '<p>' + escHtml(l.county_name) + area + ' · ' + formatPrice(l.monthly_rent) + '/mo</p>'
+          +   '<p style="font-size:11px;color:var(--text-3)">' + l.views + ' views · ' + l.unlock_count + ' unlocks · ' + l.photo_count + ' photos · Listed ' + timeAgo(l.created_at) + '</p>'
+          + '</div>'
+          + '<span class="' + statusCls + '">' + l.status.charAt(0).toUpperCase() + l.status.slice(1) + '</span>'
+          + '<div class="lr-actions" style="flex-wrap:wrap">'
+          +   '<button class="btn-ghost btn-xs" onclick="Router.go(\'listing\',{id:\'' + l.id + '\'})"><i class="ti ti-eye"></i> View</button>'
+          +   '<button class="btn-ghost btn-xs" onclick="adminEditListing(\'' + l.id + '\')"><i class="ti ti-edit"></i> Edit</button>'
+          +   (l.status === 'active'
+              ? '<button class="btn-ghost btn-xs" onclick="adminToggleListingStatus(\'' + l.id + '\',\'inactive\')"><i class="ti ti-eye-off"></i> Deactivate</button>'
+              : '<button class="btn-ghost btn-xs" onclick="adminToggleListingStatus(\'' + l.id + '\',\'active\')"><i class="ti ti-eye"></i> Activate</button>')
+          +   '<button class="btn-danger btn-xs" onclick="adminDeleteOneListing(\'' + l.id + '\',\'' + landlordId + '\')"><i class="ti ti-trash"></i> Delete</button>'
+          + '</div>'
+          + '</div>';
+      }).join('');
+    }
+
+    app().innerHTML = '<div class="dash-layout">'
+      + dashSidebarHTML('admin', user)
+      + '<div class="dash-content">'
+      +   '<div class="page-header">'
+      +     '<button class="back-btn" onclick="Router.go(\'admin\')"><i class="ti ti-arrow-left"></i> Back to Admin</button>'
+      +     '<h1>Landlord profile</h1>'
+      +   '</div>'
+
+      // Profile card
+      +   '<div class="profile-info-card" style="margin-top:16px">'
+      +     '<div class="admin-landlord-avatar" style="width:52px;height:52px;font-size:22px">' + initial + '</div>'
+      +     '<div class="profile-meta" style="flex:1">'
+      +       '<h3>' + escHtml(lp.full_name || 'Unknown') + '</h3>'
+      +       '<p><i class="ti ti-mail" style="font-size:13px;vertical-align:-2px"></i> ' + escHtml(lp.email || '') + '</p>'
+      +       (lp.phone     ? '<p><i class="ti ti-phone"  style="font-size:13px;vertical-align:-2px"></i> ' + escHtml(lp.phone)     + '</p>' : '')
+      +       (lp.id_number ? '<p><i class="ti ti-id"     style="font-size:13px;vertical-align:-2px"></i> ID: ' + escHtml(lp.id_number) + '</p>' : '')
+      +       (lp.location  ? '<p><i class="ti ti-map-pin" style="font-size:13px;vertical-align:-2px"></i> ' + escHtml(lp.location)  + '</p>' : '')
+      +       '<p style="font-size:11px;color:var(--text-3);margin-top:4px">Joined ' + timeAgo(lp.created_at) + '</p>'
+      +     '</div>'
+      +   '</div>'
+
+      // Stats row
+      +   '<div class="metrics-row" style="margin-top:14px">'
+      +     '<div class="metric-card"><strong>' + listings.length + '</strong><span>Total listings</span></div>'
+      +     '<div class="metric-card"><strong>' + activeCount + '</strong><span>Active</span></div>'
+      +     '<div class="metric-card"><strong>' + totalViews + '</strong><span>Total views</span></div>'
+      +     '<div class="metric-card"><strong>' + totalUnlocks + '</strong><span>Unlocks</span></div>'
+      +   '</div>'
+
+      // Action buttons
+      +   '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">'
+      +     '<button class="btn-danger btn-sm" onclick="adminSuspendLandlord(\'' + landlordId + '\')">'
+      +       '<i class="ti ti-user-off"></i> Suspend landlord (deactivate all listings)'
+      +     '</button>'
+      +     '<button class="btn-green btn-sm" onclick="adminRestoreLandlord(\'' + landlordId + '\')">'
+      +       '<i class="ti ti-user-check"></i> Restore all listings'
+      +     '</button>'
+      +   '</div>'
+
+      // Listings
+      +   '<div class="panel">'
+      +     '<div class="panel-title"><i class="ti ti-building"></i> All listings by this landlord</div>'
+      +     '<div id="landlord-listings-container">' + listingRows() + '</div>'
+      +   '</div>'
+      + '</div>'
+      + '</div>';
+
+    // Actions
+    window.adminEditListing = function(id) { Router.go('edit-listing', { id: id }); };
+
+    window.adminToggleListingStatus = async function(id, newStatus) {
+      var r = await API.updateListing(id, { status: newStatus });
+      if (r.ok) { showToast('Listing ' + newStatus + '.', 'success'); adminLandlord(landlordId); }
+      else showToast(r.data.error || 'Failed.', 'error');
+    };
+
+    window.adminDeleteOneListing = async function(id, lid) {
+      if (!confirm('Delete this listing permanently? This cannot be undone.')) return;
+      var r = await API.deleteListing(id);
+      if (r.ok) { showToast('Listing deleted.', 'success'); adminLandlord(lid); }
+      else showToast(r.data.error || 'Delete failed.', 'error');
+    };
+
+    window.adminSuspendLandlord = async function(lid) {
+      if (!confirm('Suspend this landlord? All their listings will be deactivated.')) return;
+      var r = await API.adminSuspendLandlord(lid);
+      if (r.ok) { showToast(r.data.message, 'success'); adminLandlord(lid); }
+      else showToast(r.data.error || 'Failed.', 'error');
+    };
+
+    window.adminRestoreLandlord = async function(lid) {
+      if (!confirm('Restore this landlord? All their listings will be reactivated.')) return;
+      var r = await API.adminRestoreLandlord(lid);
+      if (r.ok) { showToast(r.data.message, 'success'); adminLandlord(lid); }
+      else showToast(r.data.error || 'Failed.', 'error');
+    };
+  }
+
+  /* ══════════════════════════════════════════════
      ADMIN PANEL
   ══════════════════════════════════════════════ */
   async function admin() {
@@ -1038,25 +1162,33 @@ const Pages = (() => {
     }
 
     function adminLandlordCard(l) {
-      var initial  = (l.full_name || l.email || 'L').charAt(0).toUpperCase();
-      var plural   = l.listing_count !== 1 ? 's' : '';
+      var initial      = (l.full_name || l.email || 'L').charAt(0).toUpperCase();
+      var plural       = l.listing_count !== 1 ? 's' : '';
       var phoneHtml    = l.phone     ? '<div class="admin-contact-row"><i class="ti ti-phone"></i> ' + escHtml(l.phone) + '</div>' : '';
       var idHtml       = l.id_number ? '<div class="admin-contact-row"><i class="ti ti-id"></i> ID: ' + escHtml(l.id_number) + '</div>' : '';
       var locationHtml = l.location  ? '<div class="admin-contact-row"><i class="ti ti-map-pin"></i> ' + escHtml(l.location) + '</div>' : '';
-      return '<div class="admin-landlord-card">'
+      return '<div class="admin-landlord-card" style="cursor:pointer" onclick="Pages._adminLandlord(\'' + l.id + '\')">'
         + '<div class="admin-landlord-header">'
         +   '<div class="admin-landlord-avatar">' + initial + '</div>'
         +   '<div class="admin-landlord-info" style="flex:1">'
         +     '<h4>' + escHtml(l.full_name || 'Unknown') + '</h4>'
-        +     '<p>' + l.listing_count + ' listing' + plural + ' &middot; ' + l.total_views + ' views &middot; ' + l.total_unlocks + ' unlocks</p>'
+        +     '<p>' + l.listing_count + ' listing' + plural
+        +       ' (' + (l.active_listings || 0) + ' active)'
+        +       ' &middot; ' + l.total_views + ' views &middot; ' + l.total_unlocks + ' unlocks</p>'
         +   '</div>'
-        +   '<span class="status-badge status-active">Landlord</span>'
+        +   '<span class="status-badge status-active" style="flex-shrink:0">Landlord</span>'
         + '</div>'
         + '<div class="admin-contact-row"><i class="ti ti-mail"></i> ' + escHtml(l.email || '') + '</div>'
-        + phoneHtml
-        + idHtml
-        + locationHtml
+        + phoneHtml + idHtml + locationHtml
         + '<p style="font-size:11px;color:var(--text-3);margin-top:6px">Joined ' + timeAgo(l.created_at) + '</p>'
+        + '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap" onclick="event.stopPropagation()">'
+        +   '<button class="btn-primary btn-xs" onclick="Pages._adminLandlord(\'' + l.id + '\')">'
+        +     '<i class="ti ti-eye"></i> View listings'
+        +   '</button>'
+        +   '<button class="btn-danger btn-xs" onclick="quickSuspend(\'' + l.id + '\')">'
+        +     '<i class="ti ti-user-off"></i> Suspend'
+        +   '</button>'
+        + '</div>'
         + '</div>';
     }
 
@@ -1100,17 +1232,24 @@ const Pages = (() => {
       </div>
     </div>`;
 
-    window.switchAdminTab = tab => {
+    window.switchAdminTab = function(tab) {
       activeTab = tab;
-      document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
-      el(`tab-${tab}`) && el(`tab-${tab}`).classList.add('active');
+      document.querySelectorAll('.admin-tab').forEach(function(t) { t.classList.remove('active'); });
+      var tabEl = el('tab-' + tab);
+      if (tabEl) tabEl.classList.add('active');
       renderTab();
     };
-    window.adminDeleteListing = async id => {
-      if (!confirm('Delete this listing permanently?')) return;
-      const r = await API.deleteListing(id);
-      if (r.ok) { showToast('Listing deleted.','success'); Router.go('admin'); }
-      else showToast(r.data.error||'Delete failed.','error');
+    window.adminDeleteListing = async function(id) {
+      if (!confirm('Delete this listing permanently? This cannot be undone.')) return;
+      var r = await API.deleteListing(id);
+      if (r.ok) { showToast('Listing deleted.', 'success'); Router.go('admin'); }
+      else showToast(r.data.error || 'Delete failed.', 'error');
+    };
+    window.quickSuspend = async function(lid) {
+      if (!confirm('Suspend this landlord and deactivate all their listings?')) return;
+      var r = await API.adminSuspendLandlord(lid);
+      if (r.ok) { showToast(r.data.message, 'success'); Router.go('admin'); }
+      else showToast(r.data.error || 'Failed.', 'error');
     };
     renderTab();
   }
@@ -1123,5 +1262,8 @@ const Pages = (() => {
     }, 500);
   }
 
-  return { home, browse, counties, listing, dashboard, addListing, editListing, unlocks, profile, admin, scrollToHow };
+  // Expose adminLandlord so onclick in HTML strings can reach it
+  function _adminLandlord(id) { adminLandlord(id); }
+
+  return { home, browse, counties, listing, dashboard, addListing, editListing, unlocks, profile, admin, _adminLandlord, scrollToHow };
 })();

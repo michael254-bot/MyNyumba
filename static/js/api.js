@@ -50,8 +50,11 @@ const API = (() => {
     // Search
     suggest: (q) => req('GET', `/api/search/suggest?q=${encodeURIComponent(q)}`),
     // Admin
-    adminStats:     () => req('GET', '/api/admin/stats'),
-    adminListings:  () => req('GET', '/api/admin/listings'),
-    adminLandlords: () => req('GET', '/api/admin/landlords'),
+    adminStats:            () => req('GET', '/api/admin/stats'),
+    adminListings:         () => req('GET', '/api/admin/listings'),
+    adminLandlords:        () => req('GET', '/api/admin/landlords'),
+    adminLandlordDetail:   (id) => req('GET', `/api/admin/landlords/${id}`),
+    adminSuspendLandlord:  (id) => req('POST', `/api/admin/landlords/${id}/suspend`),
+    adminRestoreLandlord:  (id) => req('POST', `/api/admin/landlords/${id}/restore`),
   };
 })();
