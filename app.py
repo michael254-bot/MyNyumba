@@ -29,13 +29,18 @@ supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-MPESA_CONSUMER_KEY    = os.getenv("MPESA_CONSUMER_KEY", "placeholder")
-MPESA_CONSUMER_SECRET = os.getenv("MPESA_CONSUMER_SECRET", "placeholder")
-MPESA_SHORTCODE       = os.getenv("MPESA_SHORTCODE", "174379")
-MPESA_PASSKEY         = os.getenv("MPESA_PASSKEY", "placeholder")
-MPESA_CALLBACK_URL    = os.getenv("MPESA_CALLBACK_URL", "https://placeholder.url/api/mpesa/callback")
-MPESA_STK_URL         = os.getenv("MPESA_STK_URL", "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest")
-MPESA_TOKEN_URL       = os.getenv("MPESA_TOKEN_URL", "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials")
+PAYHERO_USERNAME   = os.getenv("PAYHERO_API_USERNAME", "placeholder")
+PAYHERO_PASSWORD   = os.getenv("PAYHERO_API_PASSWORD", "placeholder")
+PAYHERO_CHANNEL_ID = os.getenv("PAYHERO_CHANNEL_ID",  "placeholder")
+PAYHERO_CALLBACK   = os.getenv("PAYHERO_CALLBACK_URL", "https://placeholder.url/api/mpesa/callback")
+PAYHERO_STK_URL    = "https://backend.payhero.co.ke/api/v2/payments"
+
+def payhero_auth():
+    """Basic auth header for PayHero."""
+    creds = base64.b64encode(
+        f"{PAYHERO_USERNAME}:{PAYHERO_PASSWORD}".encode()
+    ).decode()
+    return {"Authorization": f"Basic {creds}", "Content-Type": "application/json"}
 
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
@@ -615,12 +620,6 @@ def delete_media(user, listing_id, media_id):
     return jsonify({"message":"Deleted"}), 200
 
 # ── UNLOCKS ───────────────────────────────────────────────────────────────────
-def get_mpesa_token():
-    creds = base64.b64encode(f"{MPESA_CONSUMER_KEY}:{MPESA_CONSUMER_SECRET}".encode()).decode()
-    try:
-        r = requests.get(MPESA_TOKEN_URL, headers={"Authorization":f"Basic {creds}"}, timeout=10)
-        return r.json().get("access_token")
-    except: return None
 
 @app.route("/api/unlock/initiate", methods=["POST"])
 @require_auth
@@ -650,47 +649,68 @@ def initiate_unlock(user):
     """, (uid, str(user.id), listing_id, phone, phone))
     unlock = cur.fetchone(); conn.commit()
 
-    token = get_mpesa_token()
-    if not token:
-        conn.close(); return jsonify({"error":"M-Pesa service unavailable"}), 503
-
-    ts  = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    pwd = base64.b64encode(f"{MPESA_SHORTCODE}{MPESA_PASSKEY}{ts}".encode()).decode()
+    # ── PayHero STK Push ──────────────────────────────────────────────────────
     try:
-        stk = requests.post(MPESA_STK_URL, json={
-            "BusinessShortCode": MPESA_SHORTCODE, "Password": pwd, "Timestamp": ts,
-            "TransactionType": "CustomerPayBillOnline", "Amount": 500,
-            "PartyA": phone, "PartyB": MPESA_SHORTCODE, "PhoneNumber": phone,
-            "CallBackURL": MPESA_CALLBACK_URL,
-            "AccountReference": f"MyNyumba-{str(unlock['id'])[:8]}",
-            "TransactionDesc": "House listing unlock"
-        }, headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, timeout=15)
-        cid = stk.json().get("CheckoutRequestID")
-        if cid:
-            cur.execute("UPDATE unlocks SET mpesa_checkout_request_id=%s WHERE id=%s", (cid, str(unlock["id"])))
+        resp = requests.post(
+            PAYHERO_STK_URL,
+            json={
+                "amount":             500,
+                "phone_number":       phone,
+                "channel_id":         PAYHERO_CHANNEL_ID,
+                "provider":           "m-pesa",
+                "external_reference": f"MyNyumba-{str(unlock['id'])[:8]}",
+                "callback_url":       PAYHERO_CALLBACK,
+            },
+            headers=payhero_auth(),
+            timeout=15
+        )
+        data        = resp.json()
+        checkout_id = data.get("reference") or data.get("CheckoutRequestID", "")
+        if checkout_id:
+            cur.execute(
+                "UPDATE unlocks SET mpesa_checkout_request_id=%s WHERE id=%s",
+                (checkout_id, str(unlock["id"]))
+            )
             conn.commit()
         conn.close()
-        return jsonify({"message":"STK Push sent. Enter your M-Pesa PIN.","checkout_request_id":cid,"unlock_id":str(unlock["id"])}), 200
+        return jsonify({
+            "message":             "STK Push sent. Enter your M-Pesa PIN.",
+            "checkout_request_id": checkout_id,
+            "unlock_id":           str(unlock["id"])
+        }), 200
     except Exception as e:
-        conn.close(); return jsonify({"error":str(e)}), 500
+        conn.close()
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/mpesa/callback", methods=["POST"])
 def mpesa_callback():
     try:
-        result = request.json["Body"]["stkCallback"]
-        cid    = result["CheckoutRequestID"]
-        code   = result["ResultCode"]
-        conn   = get_db(); cur = conn.cursor()
-        if code == 0:
-            meta    = {i["Name"]:i["Value"] for i in result["CallbackMetadata"]["Item"]}
-            receipt = meta.get("MpesaReceiptNumber","")
-            cur.execute("UPDATE unlocks SET status='completed',mpesa_receipt_number=%s,completed_at=NOW() WHERE mpesa_checkout_request_id=%s", (receipt, cid))
-            cur.execute("UPDATE listings SET unlock_count=unlock_count+1 WHERE id=(SELECT listing_id FROM unlocks WHERE mpesa_checkout_request_id=%s)", (cid,))
+        data    = request.json
+        # PayHero callback fields
+        status  = data.get("status", "")             # "Success" or "Failed"
+        ref     = data.get("reference", "")           # matches checkout_request_id
+        receipt = data.get("provider_reference", "")  # M-Pesa receipt number
+
+        conn = get_db(); cur = conn.cursor()
+        if status == "Success":
+            cur.execute("""
+                UPDATE unlocks
+                SET status='completed', mpesa_receipt_number=%s, completed_at=NOW()
+                WHERE mpesa_checkout_request_id=%s
+            """, (receipt, ref))
+            cur.execute("""
+                UPDATE listings SET unlock_count=unlock_count+1
+                WHERE id=(SELECT listing_id FROM unlocks WHERE mpesa_checkout_request_id=%s)
+            """, (ref,))
         else:
-            cur.execute("UPDATE unlocks SET status='failed' WHERE mpesa_checkout_request_id=%s", (cid,))
+            cur.execute(
+                "UPDATE unlocks SET status='failed' WHERE mpesa_checkout_request_id=%s",
+                (ref,)
+            )
         conn.commit(); conn.close()
-    except: pass
-    return jsonify({"ResultCode":0,"ResultDesc":"Accepted"}), 200
+    except Exception:
+        pass
+    return jsonify({"status": "ok"}), 200
 
 @app.route("/api/unlock/status/<listing_id>")
 @require_auth
