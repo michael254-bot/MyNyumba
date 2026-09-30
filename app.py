@@ -715,31 +715,39 @@ def mpesa_callback():
 @app.route("/api/unlock/status/<listing_id>")
 @require_auth
 def unlock_status(user, listing_id):
-    try:
-        conn = get_db(); cur = conn.cursor()
-        cur.execute("""
-            SELECT u.status,
-                   p.full_name  AS landlord_name,
-                   p.phone      AS landlord_phone,
-                   p.email      AS landlord_email
-            FROM unlocks u
-            LEFT JOIN listings l ON l.id = u.listing_id
-            LEFT JOIN profiles p ON p.id = l.landlord_id
-            WHERE u.tenant_id = %s AND u.listing_id = %s
-        """, (str(user.id), listing_id))
-        u = cur.fetchone(); conn.close()
-        if not u:
-            return jsonify({"status": "not_unlocked"}), 200
-        if u["status"] == "completed":
-            return jsonify({
-                "status":         "completed",
-                "landlord_name":  u["landlord_name"]  or "",
-                "landlord_phone": u["landlord_phone"] or "",
-                "landlord_email": u["landlord_email"] or ""
-            }), 200
-        return jsonify({"status": u["status"]}), 200
-    except Exception as e:
-        return jsonify({"status": "not_unlocked", "error": str(e)}), 200
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            u.status,
+            p.full_name AS landlord_name,
+            p.phone AS landlord_phone,
+            au.email AS landlord_email
+        FROM unlocks u
+        JOIN listings l ON l.id = u.listing_id
+        JOIN profiles p ON p.id = l.landlord_id
+        JOIN auth.users au ON au.id = p.id
+        WHERE u.tenant_id = %s
+          AND u.listing_id = %s
+    """, (str(user.id), listing_id))
+
+    u = cur.fetchone()
+    conn.close()
+
+    if not u:
+        return jsonify({"status": "not_unlocked"}), 200
+
+    if u["status"] == "completed":
+        return jsonify({
+            "status": "completed",
+            "landlord_name": u["landlord_name"],
+            "landlord_phone": u["landlord_phone"],
+            "landlord_email": u["landlord_email"]
+        }), 200
+
+    return jsonify({"status": u["status"]}), 200
 
 @app.route("/api/unlock/my")
 @require_auth
