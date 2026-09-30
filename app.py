@@ -692,31 +692,94 @@ def mpesa_callback():
         print("========== PAYHERO CALLBACK ==========")
         print("CALLBACK DATA:", data)
 
+        response = data.get("response") or {}
+
         # PayHero callback fields
-        status = data.get("status", "")
-        ref = data.get("reference", "")
-        checkout_id = data.get("CheckoutRequestID", "")
-        receipt = data.get("provider_reference", "")
-        external_ref = data.get("external_reference", "")
+        merchant_request_id = response.get("MerchantRequestID", "")
+        checkout_request_id = response.get("CheckoutRequestID", "")
+        external_reference = response.get("ExternalReference", "")
+        receipt = response.get("MpesaReceiptNumber", "")
+        payment_status = response.get("Status", "")
+        result_code = response.get("ResultCode")
 
-        print("STATUS:", status)
-        print("REFERENCE:", ref)
-        print("CHECKOUT REQUEST ID:", checkout_id)
-        print("PROVIDER REFERENCE:", receipt)
-        print("EXTERNAL REFERENCE:", external_ref)
+        # C2B callback fallback fields
+        user_reference = response.get("User_Reference", "")
+        c2b_receipt = (
+            response.get("MPESA_Reference", "")
+            or response.get("Transaction_Reference", "")
+        )
 
-        # Use reference first because this is what your
-        # current initiate endpoint stores in the unlock row.
-        unlock_ref = ref or checkout_id
+        if not external_reference:
+            external_reference = user_reference
+
+        if not receipt:
+            receipt = c2b_receipt
+
+        print("MERCHANT REQUEST ID:", merchant_request_id)
+        print("CHECKOUT REQUEST ID:", checkout_request_id)
+        print("EXTERNAL REFERENCE:", external_reference)
+        print("RECEIPT:", receipt)
+        print("PAYMENT STATUS:", payment_status)
+        print("RESULT CODE:", result_code)
+
+        # Determine whether payment succeeded
+        success = (
+            str(payment_status).lower() == "success"
+            or result_code == 0
+            or response.get("woocommerce_payment_status") == "complete"
+        )
+
+        # ------------------------------------------------
+        # The unlock table stores MerchantRequestID
+        # ------------------------------------------------
+        unlock_ref = merchant_request_id
 
         if not unlock_ref:
-            print("ERROR: No payment reference received")
-            return jsonify({"status": "error"}), 400
+            print("WARNING: No MerchantRequestID received")
 
-        conn = get_db()
+            # Fallback for C2B callback
+            if external_reference:
+                print("Trying ExternalReference:", external_reference)
+
+                conn = get_db()
+                cur = conn.cursor()
+
+                cur.execute("""
+                    SELECT id, listing_id, status
+                    FROM unlocks
+                    WHERE id::text = %s
+                    LIMIT 1
+                """, (external_reference,))
+
+                unlock = cur.fetchone()
+
+                if not unlock:
+                    print("No unlock found using fallback reference")
+
+                    conn.close()
+
+                    return jsonify({
+                        "status": "ok"
+                    }), 200
+
+            else:
+                return jsonify({
+                    "status": "error",
+                    "error": "No payment reference received"
+                }), 400
+
+        # ------------------------------------------------
+        # Connect to database
+        # ------------------------------------------------
+        if conn is None:
+            conn = get_db()
+
         cur = conn.cursor()
 
-        if status.lower() == "success":
+        # ------------------------------------------------
+        # Successful payment
+        # ------------------------------------------------
+        if success:
 
             cur.execute("""
                 UPDATE unlocks
@@ -725,6 +788,7 @@ def mpesa_callback():
                     mpesa_receipt_number = %s,
                     completed_at = NOW()
                 WHERE mpesa_checkout_request_id = %s
+                  AND status <> 'completed'
                 RETURNING id, listing_id
             """, (receipt, unlock_ref))
 
@@ -733,26 +797,36 @@ def mpesa_callback():
             print("UPDATED UNLOCK:", unlock)
 
             if unlock:
-                listing_id = unlock["listing_id"]
+
+                try:
+                    listing_id = unlock["listing_id"]
+                except (TypeError, KeyError):
+                    listing_id = unlock[1]
 
                 cur.execute("""
                     UPDATE listings
-                    SET unlock_count = unlock_count + 1
+                    SET unlock_count = COALESCE(unlock_count, 0) + 1
                     WHERE id = %s
                 """, (listing_id,))
 
                 print("UPDATED LISTING:", listing_id)
+
             else:
                 print(
-                    "WARNING: No unlock matched reference:",
+                    "WARNING: No unlock matched MerchantRequestID:",
                     unlock_ref
                 )
 
+        # ------------------------------------------------
+        # Failed payment
+        # ------------------------------------------------
         else:
+
             cur.execute("""
                 UPDATE unlocks
                 SET status = 'failed'
                 WHERE mpesa_checkout_request_id = %s
+                  AND status <> 'completed'
             """, (unlock_ref,))
 
             print("UNLOCK MARKED FAILED:", unlock_ref)
@@ -762,15 +836,18 @@ def mpesa_callback():
         print("CALLBACK PROCESSED SUCCESSFULLY")
         print("====================================")
 
-        return jsonify({"status": "ok"}), 200
+        return jsonify({
+            "status": "ok"
+        }), 200
 
     except Exception as e:
+
         if conn:
             conn.rollback()
 
         print("========== CALLBACK ERROR ==========")
         print("ERROR:", str(e))
-        print("===================================")
+        print("====================================")
 
         return jsonify({
             "status": "error",
@@ -778,6 +855,7 @@ def mpesa_callback():
         }), 500
 
     finally:
+
         if conn:
             conn.close()
 
