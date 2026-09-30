@@ -684,33 +684,102 @@ def initiate_unlock(user):
 
 @app.route("/api/mpesa/callback", methods=["POST"])
 def mpesa_callback():
-    try:
-        data    = request.json
-        # PayHero callback fields
-        status  = data.get("status", "")             # "Success" or "Failed"
-        ref     = data.get("reference", "")           # matches checkout_request_id
-        receipt = data.get("provider_reference", "")  # M-Pesa receipt number
+    conn = None
 
-        conn = get_db(); cur = conn.cursor()
-        if status == "Success":
+    try:
+        data = request.get_json(silent=True) or {}
+
+        print("========== PAYHERO CALLBACK ==========")
+        print("CALLBACK DATA:", data)
+
+        # PayHero callback fields
+        status = data.get("status", "")
+        ref = data.get("reference", "")
+        checkout_id = data.get("CheckoutRequestID", "")
+        receipt = data.get("provider_reference", "")
+        external_ref = data.get("external_reference", "")
+
+        print("STATUS:", status)
+        print("REFERENCE:", ref)
+        print("CHECKOUT REQUEST ID:", checkout_id)
+        print("PROVIDER REFERENCE:", receipt)
+        print("EXTERNAL REFERENCE:", external_ref)
+
+        # Use reference first because this is what your
+        # current initiate endpoint stores in the unlock row.
+        unlock_ref = ref or checkout_id
+
+        if not unlock_ref:
+            print("ERROR: No payment reference received")
+            return jsonify({"status": "error"}), 400
+
+        conn = get_db()
+        cur = conn.cursor()
+
+        if status.lower() == "success":
+
             cur.execute("""
                 UPDATE unlocks
-                SET status='completed', mpesa_receipt_number=%s, completed_at=NOW()
-                WHERE mpesa_checkout_request_id=%s
-            """, (receipt, ref))
-            cur.execute("""
-                UPDATE listings SET unlock_count=unlock_count+1
-                WHERE id=(SELECT listing_id FROM unlocks WHERE mpesa_checkout_request_id=%s)
-            """, (ref,))
+                SET
+                    status = 'completed',
+                    mpesa_receipt_number = %s,
+                    completed_at = NOW()
+                WHERE mpesa_checkout_request_id = %s
+                RETURNING id, listing_id
+            """, (receipt, unlock_ref))
+
+            unlock = cur.fetchone()
+
+            print("UPDATED UNLOCK:", unlock)
+
+            if unlock:
+                listing_id = unlock["listing_id"]
+
+                cur.execute("""
+                    UPDATE listings
+                    SET unlock_count = unlock_count + 1
+                    WHERE id = %s
+                """, (listing_id,))
+
+                print("UPDATED LISTING:", listing_id)
+            else:
+                print(
+                    "WARNING: No unlock matched reference:",
+                    unlock_ref
+                )
+
         else:
-            cur.execute(
-                "UPDATE unlocks SET status='failed' WHERE mpesa_checkout_request_id=%s",
-                (ref,)
-            )
-        conn.commit(); conn.close()
-    except Exception:
-        pass
-    return jsonify({"status": "ok"}), 200
+            cur.execute("""
+                UPDATE unlocks
+                SET status = 'failed'
+                WHERE mpesa_checkout_request_id = %s
+            """, (unlock_ref,))
+
+            print("UNLOCK MARKED FAILED:", unlock_ref)
+
+        conn.commit()
+
+        print("CALLBACK PROCESSED SUCCESSFULLY")
+        print("====================================")
+
+        return jsonify({"status": "ok"}), 200
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+
+        print("========== CALLBACK ERROR ==========")
+        print("ERROR:", str(e))
+        print("===================================")
+
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+    finally:
+        if conn:
+            conn.close()
 
 @app.route("/api/unlock/status/<listing_id>")
 @require_auth
