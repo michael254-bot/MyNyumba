@@ -141,12 +141,25 @@ const Auth = (() => {
   }
 
   async function restoreSession() {
-    const token = localStorage.getItem('mn_token');
+    const token        = localStorage.getItem('mn_token');
+    const refreshToken = localStorage.getItem('mn_refresh');
     if (!token) { updateNavUI(); return; }
+
     const r = await API.me();
     if (r.ok) {
       _user = r.data;
       localStorage.setItem('mn_user', JSON.stringify(r.data));
+    } else if (r.status === 401 && refreshToken) {
+      // Token expired — try to refresh silently
+      try {
+        const { createClient } = window.supabase || {};
+        // Attempt refresh via backend re-login is not possible without password,
+        // so clear and ask user to log in again gracefully
+        clear();
+        showToast('Your session expired. Please log in again.', 'info');
+      } catch {
+        clear();
+      }
     } else {
       clear();
     }

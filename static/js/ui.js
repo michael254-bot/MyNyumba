@@ -240,17 +240,47 @@ const Unlock = (() => {
     let tries = 0;
     const interval = setInterval(async () => {
       tries++;
+
+      // Stop polling if user logged out
+      if (!Auth.current()) {
+        clearInterval(interval);
+        return;
+      }
+
       const r = await API.unlockStatus(listingId);
-      if (r.ok && r.data.status === 'completed') {
+
+      // Stop on server errors — don't spam
+      if (!r.ok || r.status === 500 || r.status === 401) {
+        clearInterval(interval);
+        const errEl = el('unlock-error');
+        const sucEl = el('unlock-success');
+        if (errEl) {
+          showEl(errEl);
+          errEl.textContent = r.status === 401
+            ? 'Session expired. Please log in again.'
+            : 'Could not verify payment status. Please check your M-Pesa messages. If you paid, contact support.';
+        }
+        hideEl(sucEl);
+        const btn = el('unlock-submit-btn');
+        if (btn) showEl(btn);
+        return;
+      }
+
+      if (r.data.status === 'completed') {
         clearInterval(interval);
         closeAllModals();
         showToast('Payment confirmed! Contact details unlocked.', 'success');
         Router.go('listing', { id: listingId });
-      } else if (tries >= 20 || (r.ok && r.data.status === 'failed')) {
+      } else if (tries >= 20 || r.data.status === 'failed') {
         clearInterval(interval);
         const errEl = el('unlock-error');
         const sucEl = el('unlock-success');
-        if (errEl) { showEl(errEl); errEl.textContent = 'Payment not confirmed. If you paid, contact support.'; }
+        if (errEl) {
+          showEl(errEl);
+          errEl.textContent = r.data.status === 'failed'
+            ? 'Payment failed or cancelled. Please try again.'
+            : 'Payment not confirmed yet. If you paid, please contact support.';
+        }
         hideEl(sucEl);
         const btn = el('unlock-submit-btn');
         if (btn) showEl(btn);
