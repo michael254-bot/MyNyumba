@@ -32,7 +32,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 PAYHERO_USERNAME   = os.getenv("PAYHERO_API_USERNAME", "placeholder")
 PAYHERO_PASSWORD   = os.getenv("PAYHERO_API_PASSWORD", "placeholder")
 PAYHERO_CHANNEL_ID = os.getenv("PAYHERO_CHANNEL_ID",  "placeholder")
-PAYHERO_CALLBACK   = os.getenv("PAYHERO_CALLBACK_URL", "https://placeholder.url/api/mpesa/callback")
+PAYHERO_CALLBACK   = os.getenv("PAYHERO_CALLBACK_URL", "https://mynyumba.onrender.com/api/mpesa/callback")
 PAYHERO_STK_URL    = "https://backend.payhero.co.ke/api/v2/payments"
 
 def payhero_auth():
