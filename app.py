@@ -654,7 +654,7 @@ def initiate_unlock(user):
         resp = requests.post(
             PAYHERO_STK_URL,
             json={
-                "amount":             1,
+                "amount":             500,
                 "phone_number":       phone,
                 "channel_id":         PAYHERO_CHANNEL_ID,
                 "provider":           "m-pesa",
