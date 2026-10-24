@@ -137,7 +137,7 @@ const Pages = (() => {
       <div class="footer-inner">
         <div class="footer-top">
           <div class="footer-brand">
-            <span class="logo">My<span style="color:#fff">Nyumba</span></span>
+            <span class="logo">My<span style="color:#fff">Nyumba Homes</span></span>
             <p>Find verified rental houses across all 47 counties in Kenya. Pay Ksh 500 to unlock landlord contacts.</p>
           </div>
           <div class="footer-links-group">
