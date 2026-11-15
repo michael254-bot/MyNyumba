@@ -827,7 +827,8 @@ const Pages = (() => {
                   </select>
                 </div>
                 <div class="form-group" id="area-group"><label for="fl-area">Area or estate <span class="optional">optional</span></label>
-                  <select id="fl-area" disabled><option value="">Choose a county first</option></select>
+                  <select id="fl-area" disabled onchange="toggleNewArea(this.value)"><option value="">Choose a county first</option></select>
+                  <input type="text" id="fl-area-new" class="hidden" maxlength="60" placeholder="Type the area or estate" style="margin-top:8px"/>
                 </div>
               </div>
               <div class="form-group"><label for="fl-street">Street address or directions <span class="optional">optional</span></label>
@@ -897,9 +898,16 @@ const Pages = (() => {
       as_.disabled = true; as_.innerHTML = '<option value="">Loading areas…</option>';
       const r = await API.areas(cid);
       const areas = r.ok ? r.data : [];
-      as_.innerHTML = `<option value="">${areas.length ? 'Choose an area' : 'No areas listed for this county'}</option>` +
-        areas.map(a => `<option value="${escHtml(a.id)}">${escHtml(a.name)}</option>`).join('');
-      as_.disabled = !areas.length;
+      as_.innerHTML = `<option value="">${areas.length ? 'Choose an area' : 'No areas listed yet'}</option>` +
+        areas.map(a => `<option value="${escHtml(a.id)}">${escHtml(a.name)}</option>`).join('') +
+        `<option value="__new">My area isn't listed</option>`;
+      as_.disabled = false;
+      toggleNewArea(as_.value);
+    };
+    window.toggleNewArea = v => {
+      const inp = el('fl-area-new'); if (!inp) return;
+      inp.classList.toggle('hidden', v !== '__new');
+      if (v === '__new') inp.focus();
     };
 
     window.submitAddListing = async e => {
@@ -920,7 +928,8 @@ const Pages = (() => {
       }
       setLoading(btn, true);
       if (!createdId) {
-        const payload = { county_id:countyId, area_id:el('fl-area').value||null, street_address:el('fl-street').value.trim(), title, property_type:type, floor:el('fl-floor').value, monthly_rent:parseInt(rent, 10), deposit_months:parseInt(el('fl-deposit').value, 10), description:el('fl-desc').value.trim() };
+        const areaVal = el('fl-area').value;
+        const payload = { county_id:countyId, area_id:(areaVal && areaVal !== '__new') ? areaVal : null, area_name: areaVal === '__new' ? el('fl-area-new').value.trim() : '', street_address:el('fl-street').value.trim(), title, property_type:type, floor:el('fl-floor').value, monthly_rent:parseInt(rent, 10), deposit_months:parseInt(el('fl-deposit').value, 10), description:el('fl-desc').value.trim() };
         document.querySelectorAll('#add-listing-form input[type="checkbox"]').forEach(cb => { payload[cb.name] = cb.checked; });
         const r = await API.createListing(payload);
         if (!r.ok) { setLoading(btn, false); showEl(errEl); errEl.textContent = r.data.error||'Your listing didn\'t save. Check your connection and try again.'; return; }

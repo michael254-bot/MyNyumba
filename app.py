@@ -567,13 +567,30 @@ def create_listing(user):
            "near_matatu","near_church","near_water_kiosk"]
 
     conn = get_db(); cur = conn.cursor()
+
+    # A landlord can type an area that isn't in the list yet; reuse it if it exists in that county
+    area_id = data.get("area_id") or None
+    new_area = re.sub(r"\s+", " ", str(data.get("area_name") or "")).strip()
+    if not area_id and new_area:
+        if len(new_area) > 60 or not re.fullmatch(r"[A-Za-z0-9 '.\-/()]+", new_area):
+            conn.close(); return jsonify({"error":"Use letters and numbers only for the area name (60 characters max)."}), 400
+        new_area = new_area if any(ch.isupper() for ch in new_area) else new_area.title()
+        cur.execute("SELECT id FROM areas WHERE county_id=%s AND lower(name)=lower(%s) LIMIT 1", (data.get("county_id"), new_area))
+        row = cur.fetchone()
+        if row:
+            area_id = row["id"]
+        else:
+            area_slug = re.sub(r"[^a-z0-9]+", "-", new_area.lower().replace("'", "")).strip("-")
+            cur.execute("INSERT INTO areas (county_id,name,slug) VALUES (%s,%s,%s) RETURNING id", (data.get("county_id"), new_area, area_slug))
+            area_id = cur.fetchone()["id"]
+
     cur.execute(f"""
         INSERT INTO listings (id,landlord_id,county_id,area_id,title,description,
           property_type,floor,monthly_rent,deposit_months,street_address,
           {','.join(af)},status)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,{','.join(['%s']*len(af))},'active')
         RETURNING id
-    """, (lid, str(user.id), data.get("county_id"), data.get("area_id"),
+    """, (lid, str(user.id), data.get("county_id"), area_id,
           data["title"], data.get("description"), data["property_type"],
           data.get("floor"), int(data["monthly_rent"]), int(data.get("deposit_months",2)),
           data.get("street_address"), *[bool(data.get(f,False)) for f in af]))
