@@ -134,16 +134,6 @@
       <label for="reg-phone">M-Pesa phone number</label>
       <input type="tel" id="reg-phone" placeholder="07XX XXX XXX" required autocomplete="tel"/>
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label for="reg-idnumber">ID or passport no. <span class="optional">optional</span></label>
-        <input type="text" id="reg-idnumber" placeholder="12345678"/>
-      </div>
-      <div class="form-group">
-        <label for="reg-location">Town <span class="optional">optional</span></label>
-        <input type="text" id="reg-location" placeholder="Nairobi, Kasarani"/>
-      </div>
-    </div>
     <div class="form-group">
       <label for="reg-password">Password</label>
       <div class="input-icon-wrap">
@@ -178,7 +168,7 @@
   <div id="unlock-error" class="form-error hidden"></div>
   <div id="unlock-success" class="form-success hidden"></div>
   <button class="btn-primary btn-block" id="unlock-submit-btn" onclick="Unlock.initiate()">Pay Ksh 500 with M-Pesa</button>
-  <p class="modal-note">We'll send a prompt to your phone. Enter your M-Pesa PIN and the number shows up here.</p>
+  <p class="modal-note">An M-Pesa prompt pops up on this phone within a few seconds. Enter your PIN and the landlord's number appears here. You're only charged if you enter your PIN. No prompt after a minute? Check the number and press pay again.</p>
 </div>
 
 <!-- ══ REVIEW MODAL ══════════════════════════════════════════════════════════ -->

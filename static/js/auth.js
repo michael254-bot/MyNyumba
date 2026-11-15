@@ -103,8 +103,8 @@ const Auth = (() => {
       email:     document.getElementById('reg-email').value.trim().toLowerCase(),
       password:  document.getElementById('reg-password').value,
       phone:     document.getElementById('reg-phone').value.trim(),
-      id_number: document.getElementById('reg-idnumber').value.trim(),
-      location:  document.getElementById('reg-location').value.trim(),
+      id_number: ((document.getElementById('reg-idnumber') || {}).value || '').trim(),
+      location:  ((document.getElementById('reg-location') || {}).value || '').trim(),
       role:      document.getElementById('reg-role').value,
     };
 

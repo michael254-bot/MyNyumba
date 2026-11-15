@@ -107,6 +107,8 @@ const Uploader = (() => {
     item.progress = p;
     const bar = item.el && item.el.querySelector('.mp-bar i');
     if (bar) bar.style.width = Math.round(p * 100) + '%';
+    const st = item.el && item.el.querySelector('.mp-state');
+    if (st && item.status === 'uploading') st.textContent = Math.round(p * 100) + '%';
     if (item.owner && item.owner.onProgress) item.owner.onProgress();
   }
 
@@ -126,12 +128,9 @@ const Uploader = (() => {
       const busy = items.some(i => i.status === 'compressing');
       const orig = items.reduce((a, i) => a + i.origSize, 0);
       const now  = items.reduce((a, i) => a + (i.blob ? i.blob.size : i.origSize), 0);
-      const parts = [];
-      if (photos) parts.push(`${photos} photo${photos !== 1 ? 's' : ''}`);
-      if (videos) parts.push(`${videos} video${videos !== 1 ? 's' : ''}`);
       s.innerHTML = busy
         ? `Shrinking photos so they upload faster…`
-        : `<strong>${parts.join(' and ')}</strong>, ${fmtSize(now)} to upload${now < orig * 0.9 ? ` (down from ${fmtSize(orig)})` : ''}. The first photo is the cover.`;
+        : `<strong>${photos} of ${MAX_PHOTOS} photos${videos ? ` and ${videos} video${videos !== 1 ? 's' : ''}` : ''}</strong>, ${fmtSize(now)} to upload${now < orig * 0.9 ? `, down from ${fmtSize(orig)}` : ''}. The first photo is the cover; remove and re-add photos to change the order.`;
     }
 
     function renderItem(item) {
@@ -140,7 +139,8 @@ const Uploader = (() => {
       const media = item.type === 'photo'
         ? `<img src="${item.url}" alt="" decoding="async"/>`
         : `<video src="${item.url}#t=0.5" muted playsinline preload="metadata"></video>`;
-      div.innerHTML = `${media}<div class="mp-meta"><span class="mp-size">${item.type === 'video' ? 'Video' : '…'}</span></div>
+      div.innerHTML = `${media}<div class="mp-meta"><span class="mp-size">${item.type === 'video' ? 'Video' : 'Shrinking…'}</span></div>
+        <div class="mp-state"></div>
         <div class="mp-bar"><i></i></div>
         <button type="button" class="mp-remove" aria-label="Remove"><i class="ti ti-x"></i></button>`;
       div.querySelector('.mp-remove').onclick = () => remove(item.id);
@@ -157,7 +157,7 @@ const Uploader = (() => {
       });
     }
 
-    function changed() { refreshCover(); renderSummary(); if (onChange) onChange(); }
+    function changed() { refreshCover(); renderSummary(); if (onChange) onChange(); if (inst.onChange) inst.onChange(); }
 
     async function addFiles(fileList, type) {
       const files = Array.from(fileList || []);
@@ -207,13 +207,14 @@ const Uploader = (() => {
         .sort((a, b) => (a.type === b.type ? 0 : a.type === 'photo' ? -1 : 1));
       const order = new Map(items.filter(i => i.type === 'photo').concat(items.filter(i => i.type === 'video')).map((it, k) => [it, startOrder + k]));
       const failed = [];
+      queue.forEach(it => { it.el.classList.remove('is-error', 'is-done'); it.el.classList.add('is-queued'); const st = it.el.querySelector('.mp-state'); if (st) st.textContent = 'Waiting'; });
       async function worker() {
         while (queue.length) {
           const item = queue.shift();
-          item.status = 'uploading'; item.el.classList.add('is-busy'); setProgress(item, 0.02);
+          item.status = 'uploading'; item.el.classList.remove('is-queued'); item.el.classList.add('is-uploading'); setProgress(item, 0.02);
           let r = await uploadOne(listingId, item, order.get(item));
           if (!r.ok) r = await uploadOne(listingId, item, order.get(item)); // one retry for flaky mobile data
-          item.el.classList.remove('is-busy');
+          item.el.classList.remove('is-uploading');
           if (r.ok) { item.status = 'done'; setProgress(item, 1); item.el.classList.add('is-done'); }
           else {
             item.status = 'error'; item.error = r.error; item.el.classList.add('is-error');

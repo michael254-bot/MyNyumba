@@ -34,6 +34,7 @@ const Pages = (() => {
   }
 
   function loading() {
+    app().classList.remove('has-book-bar');
     app().innerHTML = `<div class="loading-state"><span class="spinner"></span><span>Loading…</span></div>`;
   }
 
@@ -83,9 +84,6 @@ const Pages = (() => {
         <div class="card-tags">${[typeLabel(l.property_type)].concat(extras.slice(0,2)).join(', ')}</div>
         <div class="card-footer">
           <div class="card-price">${formatPrice(l.monthly_rent)}<small> a month</small></div>
-          ${showUnlocked
-            ? `<button class="unlock-btn unlocked" onclick="event.stopPropagation();${go}"><i class="ti ti-check"></i> Unlocked</button>`
-            : `<button class="unlock-btn" onclick="event.stopPropagation();Unlock.open('${jsStr(l.id)}','${jsStr(l.title)}')" aria-label="Get landlord's number for ${escHtml(l.title)}"><i class="ti ti-lock"></i> Ksh 500</button>`}
         </div>
       </div>
     </article>`;
@@ -244,23 +242,21 @@ const Pages = (() => {
       </div>
     </section>
 
-    <section class="section" style="padding-top:24px">
-      <div class="sec-hdr">
-        <div>
-          <h2>New this week</h2>
-          <p>The latest houses landlords have put up.</p>
-        </div>
-        <a href="/browse" onclick="Router.go('browse');return false;">See all houses</a>
+    <section class="section" style="padding-top:32px">
+      <div class="sec-center">
+        <h2>New this week</h2>
+        <p>The latest houses landlords have put up. Tap one to see photos, the deposit and what's included.</p>
+        <div class="counties-bar" id="home-counties"></div>
       </div>
-      <div class="counties-bar" id="home-counties" style="padding:0;margin-bottom:28px"></div>
       <div id="home-listings">${skeletonGrid(8)}</div>
+      <div class="sec-more"><button class="btn-outline" onclick="Router.go('browse')">See all houses</button></div>
     </section>
 
     <section class="how-section" id="how-it-works">
       <h2>How MyNyumba works</h2>
-      <p class="sub">No agents and no viewing fees. You deal with the landlord directly.</p>
+      <p class="sub">No agent in the middle. You deal with the landlord yourself.</p>
       <div class="steps-grid">
-        <div class="step-card"><div class="step-num">Step 1</div><h3>Search for free</h3><p>Filter by county, estate, rent and what's included. Every listing shows photos, the rent and the deposit up front.</p></div>
+        <div class="step-card"><div class="step-num">Step 1</div><h3>Search for free</h3><p>Filter by county, estate, rent and what's included. You see the photos, rent and deposit before you pay anything.</p></div>
         <div class="step-card"><div class="step-num">Step 2</div><h3>Pay Ksh 500 by M-Pesa</h3><p>Pick a house and we send an M-Pesa prompt to your phone. Enter your PIN. You pay once per house, never again for the same one.</p></div>
         <div class="step-card"><div class="step-num">Step 3</div><h3>Call the landlord</h3><p>The landlord's phone number, WhatsApp and the exact address show up straight away, so you can book a viewing.</p></div>
       </div>
@@ -303,8 +299,8 @@ const Pages = (() => {
     const st = el('stat-total');
     if (st) st.parentElement.innerHTML = `<strong>${Number(total).toLocaleString()}</strong> house${total!==1?'s':''} listed`;
     const cb = el('home-counties');
-    if (cb) cb.innerHTML = topCounties.map(c=>`<button onclick="Router.go('browse',{county:'${jsStr(c.slug)}'})">${escHtml(c.name)}</button>`).join('')
-      + `<button onclick="Router.go('counties')">All 47 counties</button>`;
+    if (cb) cb.innerHTML = topCounties.filter(c => c.listing_count > 0).slice(0, 8).map(c=>`<button onclick="Router.go('browse',{county:'${jsStr(c.slug)}'})">${escHtml(c.name)}</button>`).join('')
+      + `<button onclick="Router.go('counties')">All counties</button>`;
     const hl = el('home-listings');
     if (hl) hl.innerHTML = listings.length > 0
       ? `<div class="cards-grid">${listings.map(l=>listingCard(l)).join('')}</div>`
@@ -356,7 +352,6 @@ const Pages = (() => {
     <div class="browse-header">
       <div class="browse-header-inner">
         ${searchBoxHTML('browse', { q: searchQ, type: propType, max_price: maxPrice })}
-        <div class="counties-bar" id="browse-counties"></div>
       </div>
     </div>
     <div id="area-chips-wrap"></div>
@@ -366,6 +361,8 @@ const Pages = (() => {
         <span id="results-count">&nbsp;</span>
       </div>
       <div class="results-controls">
+        <label class="sr-only" for="browse-county">County</label>
+        <select class="sort-select" id="browse-county" onchange="browseSetCounty(this.value)"><option value="">All counties</option></select>
         <label class="sr-only" for="browse-sort">Sort</label>
         <select class="sort-select" id="browse-sort" onchange="browseSort(this.value)">
           ${[['newest','Newest first'],['price_asc','Lowest rent'],['price_desc','Highest rent'],['rating','Best rated'],['popular','Most unlocked']]
@@ -448,12 +445,10 @@ const Pages = (() => {
     const co = counties.find(c => c.slug === activeCounty);
     const title = el('results-title');
     if (title) title.textContent = co ? `Houses in ${co.name}` : (searchQ ? `Houses matching “${searchQ}”` : 'Houses for rent');
-    const cb = el('browse-counties');
-    if (cb) cb.innerHTML = `<button class="${!activeCounty?'active':''}" onclick="browseSetCounty('')">All counties</button>` +
-      [...counties].sort((a,b) => b.listing_count - a.listing_count || a.name.localeCompare(b.name))
-        .map(c=>`<button class="${activeCounty===c.slug?'active':''}" onclick="browseSetCounty('${jsStr(c.slug)}')">${escHtml(c.name)}</button>`).join('');
-    const activeBtn = cb && cb.querySelector('button.active');
-    if (activeBtn && activeCounty) activeBtn.scrollIntoView({ block: 'nearest', inline: 'center' });
+    const cs = el('browse-county');
+    if (cs) cs.innerHTML = `<option value="">All counties</option>` +
+      [...counties].sort((a,b) => a.name.localeCompare(b.name))
+        .map(c=>`<option value="${escHtml(c.slug)}" ${activeCounty===c.slug?'selected':''}>${escHtml(c.name)}${c.listing_count ? ` (${c.listing_count})` : ''}</option>`).join('');
     if (co) {
       const ar = await API.areas(co.id);
       const areas = ar.ok ? ar.data : [];
@@ -547,12 +542,12 @@ const Pages = (() => {
     const included = AMENITIES.filter(([k]) => l[k]);
     const missing  = AMENITIES.filter(([k]) => !l[k]);
     const nearby   = NEARBY.filter(([k]) => l[k]);
+    const depositText = `${formatPrice(l.monthly_rent * l.deposit_months)} (${l.deposit_months} month${l.deposit_months>1?'s':''})`;
     const facts = [
-      ['House type', typeLabel(l.property_type)],
-      l.floor ? ['Floor', `${escHtml(l.floor)} floor`] : null,
-      ['Deposit', `${formatPrice(l.monthly_rent * l.deposit_months)} (${l.deposit_months} month${l.deposit_months>1?'s':''})`],
+      ['Deposit', depositText],
+      ['Move in', 'Available now'],
       ['Listed', timeAgo(l.created_at)],
-    ].filter(Boolean);
+    ];
 
     const address = (ld && ld.street_address) || '';
     const phoneDigits = ld ? String(ld.landlord_phone||'').replace(/\D/g,'').replace(/^0/, '254') : '';
@@ -560,11 +555,13 @@ const Pages = (() => {
       <div class="contact-reveal-panel">
         <h3><i class="ti ti-circle-check"></i> You've unlocked this house</h3>
         <div class="contact-row"><i class="ti ti-user"></i><div><strong>${escHtml(ld.landlord_name||'Landlord')}</strong><small>Landlord</small></div></div>
-        <div class="contact-row"><i class="ti ti-phone"></i><div><strong><a href="tel:${escHtml(ld.landlord_phone||'')}">${escHtml(ld.landlord_phone||'Not given')}</a></strong><small>Call or SMS</small></div></div>
-        ${ld.landlord_email ? `<div class="contact-row"><i class="ti ti-mail"></i><div><strong><a href="mailto:${escHtml(ld.landlord_email)}">${escHtml(ld.landlord_email)}</a></strong><small>Email</small></div></div>` : ''}
-        ${address ? `<div class="contact-row"><i class="ti ti-map-pin"></i><div><strong>${escHtml(address)}</strong><small>Address</small></div></div>` : ''}
-        ${phoneDigits ? `<a class="btn-whatsapp" href="https://wa.me/${phoneDigits}" target="_blank" rel="noopener"><i class="ti ti-brand-whatsapp"></i> Message on WhatsApp</a>` : ''}
-        <button class="btn-ghost btn-block mt-12" onclick="Reviews.open('${jsStr(l.id)}')">Review this house</button>
+        <div class="contact-row"><i class="ti ti-phone"></i><div><strong>${escHtml(ld.landlord_phone||'Not given')}</strong><small>Phone and WhatsApp</small></div></div>
+        <div class="contact-row"><i class="ti ti-map-pin"></i><div><strong>${address ? escHtml(address) : placeLine(l.area_name, l.county_name)}</strong><small>${address ? 'Address' : 'No street address given. Ask for directions when you call.'}</small></div></div>
+        <div class="contact-actions">
+          ${ld.landlord_phone ? `<a class="btn-primary" href="tel:${escHtml(String(ld.landlord_phone).replace(/\s/g,''))}"><i class="ti ti-phone"></i> Call ${escHtml(ld.landlord_name ? ld.landlord_name.split(' ')[0] : 'the landlord')}</a>` : ''}
+          ${phoneDigits ? `<a class="btn-whatsapp" href="https://wa.me/${phoneDigits}" target="_blank" rel="noopener"><i class="ti ti-brand-whatsapp"></i> WhatsApp</a>` : ''}
+        </div>
+        ${ld.landlord_email ? `<p class="book-note">Or email <a href="mailto:${escHtml(ld.landlord_email)}" style="text-decoration:underline">${escHtml(ld.landlord_email)}</a></p>` : ''}
       </div>` : `
       <div class="contact-lock-panel">
         <button class="btn-primary btn-block" onclick="Unlock.open('${jsStr(l.id)}','${jsStr(l.title)}')">Get landlord's number</button>
@@ -587,13 +584,13 @@ const Pages = (() => {
         </div>
       </div>
       ${galleryHtml}
-      <div class="detail-layout">
+      <div class="detail-layout ${isUnlocked ? 'is-unlocked' : ''}">
         <div class="detail-main">
           <div class="detail-summary">
-            <h2>${typeLabel(l.property_type)} in ${escHtml(l.area_name || l.county_name)}</h2>
+            <h2>${typeLabel(l.property_type)}${l.floor ? `, ${escHtml(l.floor)} floor` : ''}</h2>
             <div class="detail-tags">
               <span class="dtag green">Available now</span>
-              ${l.floor ? `<span class="dtag">${escHtml(l.floor)} floor</span>` : ''}
+              <span class="dtag">Deposit ${depositText}</span>
               <span class="dtag">${Number(l.views||0).toLocaleString()} views</span>
             </div>
           </div>
@@ -624,6 +621,7 @@ const Pages = (() => {
                   ${rv.comment?`<p class="review-comment">${escHtml(rv.comment)}</p>`:''}
                 </div>`).join('')}</div>`
               : `<p class="text-muted">No reviews yet. Only tenants who unlocked this house can review it.</p>`}
+            ${isUnlocked ? `<button class="btn-outline mt-16" onclick="Reviews.open('${jsStr(l.id)}')">Review this house</button>` : ''}
           </section>
         </div>
         <aside class="detail-sidebar">
@@ -636,7 +634,12 @@ const Pages = (() => {
         </aside>
       </div>
     </div>
+    ${isUnlocked ? '' : `<div class="mobile-book-bar">
+      <div style="min-width:0"><div class="detail-price">${formatPrice(l.monthly_rent)}<small>/month</small></div><small class="dep">Deposit ${formatPrice(l.monthly_rent * l.deposit_months)}</small></div>
+      <button class="btn-primary" onclick="Unlock.open('${jsStr(l.id)}','${jsStr(l.title)}')">Get number (Ksh 500)</button>
+    </div>`}
     ${footerHTML()}`;
+    app().classList.toggle('has-book-bar', !isUnlocked);
 
     /* Full-screen viewer for photos and video */
     window.openLightbox = (start) => {
@@ -720,13 +723,21 @@ const Pages = (() => {
               <span class="status-badge status-${escHtml(l.status)}">${({active:'Live',pending:'In review',inactive:'Hidden'})[l.status]||escHtml(l.status)}</span>
               <div class="lr-actions">
                 <button class="btn-ghost btn-xs" onclick="Router.go('edit-listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-edit"></i> Edit</button>
-                ${l.status==='active' ? `<button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> View</button>` : ''}
-                <button class="btn-danger btn-xs" onclick="confirmDeleteListing('${jsStr(l.id)}','${jsStr(l.title)}')" aria-label="Delete ${escHtml(l.title)}"><i class="ti ti-trash"></i></button>
+                ${l.status==='active'
+                  ? `<button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> View</button>
+                     <button class="btn-ghost btn-xs" onclick="setListingStatus('${jsStr(l.id)}','inactive')"><i class="ti ti-eye-off"></i> Hide</button>`
+                  : l.status==='inactive' ? `<button class="btn-ghost btn-xs" onclick="setListingStatus('${jsStr(l.id)}','active')"><i class="ti ti-eye"></i> Make live</button>` : ''}
+                <button class="btn-danger btn-xs" onclick="confirmDeleteListing('${jsStr(l.id)}','${jsStr(l.title)}')"><i class="ti ti-trash"></i> Delete</button>
               </div>
             </div>`).join('')}
       </div>
     </div>`;
 
+    window.setListingStatus = async (id, status) => {
+      const r = await API.updateListing(id, { status });
+      if (r.ok) { showToast(status === 'active' ? 'Listing is live again.' : 'Listing hidden. Tenants can\'t see it until you make it live.', 'success'); Router.go('dashboard'); }
+      else showToast(r.data.error || 'That didn\'t work. Try again.', 'error');
+    };
     window.confirmDeleteListing = async (id, title) => {
       if (!confirm(`Delete "${title}"? Its photos and reviews go too. You can't undo this.`)) return;
       const r = await API.deleteListing(id);
@@ -737,7 +748,7 @@ const Pages = (() => {
 
   /* ── Shared: media picker block used by add & edit ── */
   function mediaPickerHTML() {
-    return `<div class="upload-row">
+    return `<div class="media-block" id="media-block"><div class="upload-row">
         <label class="upload-box" id="photo-drop" for="photo-input">
           <i class="ti ti-camera"></i><p>Add photos</p><small>Up to 15. We shrink them before upload, so big phone photos are fine.</small>
           <input type="file" id="photo-input" accept="image/*" multiple class="sr-only" onchange="addMedia(this,'photo')"/>
@@ -748,10 +759,11 @@ const Pages = (() => {
         </label>
       </div>
       <div class="media-preview-grid" id="media-previews"></div>
-      <p class="upload-summary" id="media-summary"></p>`;
+      <p class="upload-summary" id="media-summary"></p></div>`;
   }
 
   function bindMediaPicker(uploader) {
+    uploader.onChange = () => { const b = el('media-block'); if (b) b.classList.toggle('has-media', uploader.count() > 0); };
     window.addMedia = async (input, type) => {
       const files = Array.from(input.files); input.value = ''; // copy first: clearing the input empties its FileList
       const errors = await uploader.addFiles(files, type);
@@ -769,6 +781,7 @@ const Pages = (() => {
       const t = uploader.totals();
       const bar = el('up-bar'); if (bar) bar.style.width = Math.round(t.fraction * 100) + '%';
       const c = el('up-count'); if (c) c.textContent = `${t.done} of ${t.count} done`;
+      const sm = el('media-summary'); if (sm && t.done < t.count) sm.innerHTML = `<strong>Uploading ${t.done} of ${t.count}</strong>, ${Math.round(t.fraction * 100)}% sent. Keep this page open until it finishes.`;
     };
     uploader.onProgress();
     const res = await uploader.uploadAll(listingId, startOrder);
@@ -799,7 +812,7 @@ const Pages = (() => {
           <form id="add-listing-form" onsubmit="submitAddListing(event)" novalidate>
             <div class="form-panel">
               <h2 class="form-panel-title">Photos and video</h2>
-              <p class="form-panel-sub">Listings with five or more clear photos get far more unlocks. Start with the sitting room.</p>
+              <p class="form-panel-sub">Tenants scroll past listings with one or two photos. Five or more clear ones work best, starting with the sitting room.</p>
               ${mediaPickerHTML()}
             </div>
             <div class="form-panel">
@@ -817,14 +830,14 @@ const Pages = (() => {
                 </div>
               </div>
               <div class="form-group"><label for="fl-street">Street address or directions <span class="optional">optional</span></label>
-                <input type="text" id="fl-street" placeholder="Phase 2, Road B, behind the Total petrol station"/>
+                <input type="text" id="fl-street" placeholder="Phase 2, Road B, near the Total station"/>
               </div>
             </div>
             <div class="form-panel">
               <h2 class="form-panel-title">About the house</h2>
               <p class="form-panel-sub">Be specific. "2 bedroom with borehole near Thika Road Mall" beats "Spacious modern apartment".</p>
               <div class="form-group"><label for="fl-title">Listing title</label>
-                <input type="text" id="fl-title" maxlength="80" placeholder="1 bedroom with balcony near Kasarani stadium" required/>
+                <input type="text" id="fl-title" maxlength="80" placeholder="1 bedroom near Kasarani stadium" required/>
               </div>
               <div class="form-row">
                 <div class="form-group"><label for="fl-type">House type</label>
@@ -1057,7 +1070,7 @@ const Pages = (() => {
                 <p>${placeLine(u.area_name, u.county_name)}, ${formatPrice(u.monthly_rent)} a month, ${typeLabel(u.property_type).toLowerCase()}</p>
                 <p>Unlocked ${timeAgo(u.completed_at).toLowerCase()}</p>
               </div>
-              <button class="btn-outline btn-sm" onclick="Router.go('listing',{id:'${jsStr(u.listing_id)}'})">See contact</button>
+              <button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(u.listing_id)}'})"><i class="ti ti-phone"></i> See contact</button>
             </div>`).join('')}
       </div>
     </div>`;
@@ -1073,12 +1086,7 @@ const Pages = (() => {
     const r = await API.me();
     const u = r.ok ? r.data : user;
 
-    const avatarClass   = u.is_admin ? 'profile-avatar admin' : 'profile-avatar';
-    const avatarLetter  = (u.full_name || u.email || 'U').charAt(0).toUpperCase();
-    const badgeClass    = u.is_admin ? 'profile-badge admin-badge' : 'profile-badge';
     const accountType   = u.is_admin ? 'Admin' : (u.role === 'landlord' ? 'Landlord' : 'Tenant');
-    const phoneRow      = u.phone    ? `<p><i class="ti ti-phone"></i> ${escHtml(u.phone)}</p>` : '';
-    const locationRow   = u.location ? `<p><i class="ti ti-map-pin"></i> ${escHtml(u.location)}</p>` : '';
 
     app().innerHTML = `
     <div class="dash-layout">
@@ -1086,17 +1094,7 @@ const Pages = (() => {
       <div class="dash-content">
         <div class="form-page">
           <div class="page-header"><h1>Profile</h1></div>
-          <p class="page-lede">This is what we use to send M-Pesa prompts and, for landlords, what tenants see after they pay.</p>
-          <div class="profile-info-card">
-            <div class="${avatarClass}">${avatarLetter}</div>
-            <div class="profile-meta">
-              <h3>${escHtml(u.full_name || '')}</h3>
-              <p><i class="ti ti-mail"></i> ${escHtml(u.email || '')}</p>
-              ${phoneRow}
-              ${locationRow}
-              <span class="${badgeClass}">${accountType} account</span>
-            </div>
-          </div>
+          <p class="page-lede">${accountType} account. We send M-Pesa prompts to this number${u.role === 'landlord' ? ', and it\'s what tenants get after they pay to contact you' : ''}.</p>
           <div class="form-panel">
             <h2 class="form-panel-title">Your details</h2>
             <div class="form-group"><label for="p-name">Full name</label><input type="text" id="p-name" value="${escHtml(u.full_name||'')}" autocomplete="name"/></div>
@@ -1104,7 +1102,7 @@ const Pages = (() => {
               <div class="form-group"><label for="p-phone">M-Pesa phone number</label><input type="tel" id="p-phone" value="${escHtml(u.phone||'')}" placeholder="07XX XXX XXX" autocomplete="tel"/></div>
               <div class="form-group"><label for="p-location">Town</label><input type="text" id="p-location" value="${escHtml(u.location||'')}" placeholder="Nairobi, Kasarani"/></div>
             </div>
-            <div class="form-group"><label for="p-idnumber">ID or passport number <span class="optional">optional</span></label><input type="text" id="p-idnumber" value="${escHtml(u.id_number||'')}"/></div>
+            <div class="form-group"><label for="p-idnumber">ID or passport number <span class="optional">optional</span></label><input type="text" id="p-idnumber" value="${escHtml(u.id_number||'')}"/><p class="form-hint">Only the MyNyumba admin sees this. It helps us verify landlords if a tenant reports a problem.</p></div>
             <div class="form-group"><label for="p-email">Email</label><input type="email" id="p-email" value="${escHtml(u.email||'')}" disabled/><p class="form-hint">Your email can't be changed here. WhatsApp support if you need to.</p></div>
             <div id="profile-error" class="form-error hidden"></div>
             <div id="profile-success" class="form-success hidden">Changes saved.</div>
@@ -1245,8 +1243,11 @@ const Pages = (() => {
         </div>
         <span class="status-badge status-${escHtml(l.status)}">${({active:'Live',pending:'In review',inactive:'Hidden'})[l.status]||escHtml(l.status)}</span>
         <div class="lr-actions">
-          <button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> View</button>
-          <button class="btn-danger btn-xs" onclick="adminDeleteListing('${jsStr(l.id)}')" aria-label="Delete"><i class="ti ti-trash"></i></button>
+          ${l.status === 'active'
+            ? `<button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> View</button>
+               <button class="btn-ghost btn-xs" onclick="adminSetStatus('${jsStr(l.id)}','inactive')"><i class="ti ti-eye-off"></i> Hide</button>`
+            : `<button class="btn-green btn-xs" onclick="adminSetStatus('${jsStr(l.id)}','active')"><i class="ti ti-check"></i> ${l.status === 'pending' ? 'Approve' : 'Make live'}</button>`}
+          <button class="btn-danger btn-xs" onclick="adminDeleteListing('${jsStr(l.id)}')"><i class="ti ti-trash"></i> Delete</button>
         </div>
       </div>`;
     }
@@ -1309,6 +1310,11 @@ const Pages = (() => {
       const tabEl = el('tab-' + tab);
       if (tabEl) tabEl.classList.add('active');
       renderTab();
+    };
+    window.adminSetStatus = async function(id, status) {
+      const r = await API.updateListing(id, { status });
+      if (r.ok) { showToast(status === 'active' ? 'Listing is live.' : 'Listing hidden.', 'success'); Router.go('admin'); }
+      else showToast(r.data.error || 'That didn\'t work. Try again.', 'error');
     };
     window.adminDeleteListing = async function(id) {
       if (!confirm('Delete this listing for good? You can\'t undo this.')) return;
