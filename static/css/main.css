@@ -151,6 +151,24 @@ select{appearance:none;-webkit-appearance:none;background-image:url("data:image/
 .let-banner{background:var(--band);border:1px solid var(--line);border-radius:var(--r-card);padding:14px 18px;margin-top:16px;font-size:15px}
 .report-link{background:none;border:none;font-size:14px;color:var(--fog);text-decoration:underline;text-underline-offset:3px;margin-top:12px;display:block;width:100%;text-align:center}
 
+.pay-steps{margin:0 0 20px 20px;font-size:15px;line-height:1.55;display:flex;flex-direction:column;gap:8px}
+.pay-steps li::marker{font-weight:600}
+.review-box{border:1px solid var(--line-strong);border-radius:var(--r-card);padding:16px;margin-top:4px;font-size:15px;line-height:1.5}
+.review-box strong{display:block;margin-bottom:4px}
+.legal{max-width:720px;margin:0 auto;padding:56px var(--gutter) 80px}
+.legal h1{font-size:clamp(32px,4vw,44px);font-weight:600;letter-spacing:-0.025em;line-height:1.15;margin-bottom:8px}
+.legal .legal-updated{font-size:15px;color:var(--fog);margin-bottom:40px}
+.legal h2{font-size:22px;font-weight:600;letter-spacing:-0.01em;margin:40px 0 12px}
+.legal p,.legal li{font-size:16px;line-height:1.7;color:var(--ink)}
+.legal p{margin-bottom:14px}
+.legal ul{margin:0 0 14px 22px;display:flex;flex-direction:column;gap:6px}
+.legal a{text-decoration:underline;text-underline-offset:3px}
+.legal-nav{display:flex;gap:20px;font-size:15px;margin-bottom:32px}
+.legal-nav a{color:var(--fog)}
+.legal-nav a.active{color:var(--ink);font-weight:600;text-decoration:underline;text-underline-offset:6px}
+.terms-note{font-size:13px;color:var(--fog);text-align:center;margin-top:12px}
+.terms-note a{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
+
 /* ── Search ──────────────────────────────────── */
 .search-box{background:var(--paper);border:1px solid var(--line-strong);border-radius:var(--r-card);display:flex;align-items:stretch;max-width:840px;margin:0 auto;padding:6px;gap:0;text-align:left;transition:border-color var(--t)}
 .search-box:focus-within{border-color:var(--ink)}

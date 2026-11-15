@@ -199,7 +199,7 @@ const Pages = (() => {
         </div>
         <div class="footer-bottom">
           <p>© ${new Date().getFullYear()} MyNyumba</p>
-          <p><a href="#">Privacy</a> &nbsp; <a href="#">Terms</a></p>
+          <p><a href="/privacy" onclick="Router.go('privacy');return false;">Privacy</a> &nbsp; <a href="/terms" onclick="Router.go('terms');return false;">Terms</a></p>
         </div>
       </div>
     </footer>`;
@@ -574,8 +574,11 @@ const Pages = (() => {
         ${ld.landlord_email ? `<p class="book-note">Or email <a href="mailto:${escHtml(ld.landlord_email)}" style="text-decoration:underline">${escHtml(ld.landlord_email)}</a></p>` : ''}
       </div>` : `
       <div class="contact-lock-panel">
-        <button class="btn-primary btn-block" onclick="Unlock.open('${jsStr(l.id)}','${jsStr(l.title)}')">Get landlord's number</button>
-        <p class="book-note">Ksh 500, paid once by M-Pesa. You get their phone, WhatsApp and the exact address.</p>
+        ${unlockR.ok && unlockR.data.status === 'manual_review'
+          ? `<div class="review-box"><strong>We're checking your M-Pesa payment</strong>Code ${escHtml(unlockR.data.manual_code || '')}. The landlord's number appears here once we've matched it. Questions? WhatsApp <a href="https://wa.me/254703245513" target="_blank" rel="noopener" style="text-decoration:underline">+254 703 245 513</a>.</div>`
+          : `${unlockR.ok && unlockR.data.status === 'failed' && unlockR.data.review_note ? `<div class="form-error">${escHtml(unlockR.data.review_note)} If you did pay, WhatsApp +254 703 245 513 with the M-Pesa SMS.</div>` : ''}
+             <button class="btn-primary btn-block" onclick="Unlock.open('${jsStr(l.id)}','${jsStr(l.title)}')">Get landlord's number</button>
+             <p class="book-note">Ksh 500, paid once by M-Pesa. You get their phone, WhatsApp and the exact address.</p>`}
       </div>`;
 
     app().innerHTML = `
@@ -649,12 +652,12 @@ const Pages = (() => {
         </aside>
       </div>
     </div>
-    ${isUnlocked || l.status !== 'active' ? '' : `<div class="mobile-book-bar">
+    ${isUnlocked || l.status !== 'active' || (unlockR.ok && unlockR.data.status === 'manual_review') ? '' : `<div class="mobile-book-bar">
       <div style="min-width:0"><div class="detail-price">${formatPrice(l.monthly_rent)}<small>/month</small></div><small class="dep">Deposit ${formatPrice(l.monthly_rent * l.deposit_months)}</small></div>
       <button class="btn-primary" onclick="Unlock.open('${jsStr(l.id)}','${jsStr(l.title)}')">Get number (Ksh 500)</button>
     </div>`}
     ${footerHTML()}`;
-    app().classList.toggle('has-book-bar', !isUnlocked && l.status === 'active');
+    app().classList.toggle('has-book-bar', !isUnlocked && l.status === 'active' && !(unlockR.ok && unlockR.data.status === 'manual_review'));
 
     /* Full-screen viewer for photos and video */
     window.openLightbox = (start) => {
@@ -1267,13 +1270,28 @@ const Pages = (() => {
     const user = Auth.current();
     if (!user || !user.is_admin) { showToast('That page is for admins only.','error'); Router.go('home'); return; }
     loading();
-    const [statsR, listingsR, landlordsR] = await Promise.all([
-      API.adminStats(), API.adminListings(), API.adminLandlords()
+    const [statsR, listingsR, landlordsR, paymentsR] = await Promise.all([
+      API.adminStats(), API.adminListings(), API.adminLandlords(), API.adminManualPayments()
     ]);
     const stats     = statsR.ok     ? statsR.data     : {};
     const listings  = listingsR.ok  ? listingsR.data  : [];
     const landlords = landlordsR.ok ? landlordsR.data : [];
-    let activeTab   = 'listings';
+    const payments  = paymentsR.ok  ? paymentsR.data  : [];
+    let activeTab   = payments.length ? 'payments' : 'listings';
+
+    function paymentRow(pmt) {
+      return `<div class="admin-listing-row">
+        <div class="lr-info">
+          <h4>${escHtml(pmt.manual_code)} &nbsp;Ksh ${Number(pmt.amount || 500).toLocaleString()}</h4>
+          <p>From ${escHtml(pmt.phone || '')}, ${escHtml(pmt.tenant_name || pmt.tenant_email || 'tenant')}. Sent ${timeAgo(pmt.manual_submitted_at).toLowerCase()}</p>
+          <p>For: ${escHtml(pmt.title)}</p>
+        </div>
+        <div class="lr-actions" style="flex:0 0 auto;width:auto;min-width:0">
+          <button class="btn-ghost btn-xs" onclick="reviewPayment('${jsStr(pmt.id)}','approve','${jsStr(pmt.manual_code)}')"><i class="ti ti-check"></i> Approve</button>
+          <button class="btn-danger btn-xs" onclick="reviewPayment('${jsStr(pmt.id)}','reject','${jsStr(pmt.manual_code)}')"><i class="ti ti-x"></i> Reject</button>
+        </div>
+      </div>`;
+    }
 
     function adminListingRow(l) {
       return `<div class="admin-listing-row">
@@ -1320,7 +1338,11 @@ const Pages = (() => {
     function renderTab() {
       const tc = el('admin-tab-content');
       if (!tc) return;
-      if (activeTab === 'listings') {
+      if (activeTab === 'payments') {
+        tc.innerHTML = payments.length
+          ? `<p class="page-lede" style="margin:16px 0 0">Check each code against the M-Pesa messages on the phone that receives Send Money payments before approving. Approve only if the amount is Ksh 500 and the code isn't already used.</p>` + payments.map(paymentRow).join('')
+          : '<p class="text-muted" style="padding:24px 0">No payments waiting. Manual M-Pesa codes show up here.</p>';
+      } else if (activeTab === 'listings') {
         tc.innerHTML = listings.length ? listings.map(adminListingRow).join('') : '<p class="text-muted" style="padding:24px 0">No listings yet.</p>';
       } else {
         tc.innerHTML = landlords.length ? landlords.map(adminLandlordCard).join('') : '<p class="text-muted" style="padding:24px 0">No landlords have signed up yet.</p>';
@@ -1342,7 +1364,8 @@ const Pages = (() => {
           <div class="admin-stat"><strong>${stats.reported_listings||0}</strong><span>Reported houses</span></div>
         </div>
         <div class="admin-tabs" role="tablist">
-          <button class="admin-tab active" id="tab-listings" role="tab" onclick="switchAdminTab('listings')">Listings (${listings.length})</button>
+          <button class="admin-tab ${activeTab==='payments'?'active':''}" id="tab-payments" role="tab" onclick="switchAdminTab('payments')">M-Pesa codes to check (${payments.length})</button>
+          <button class="admin-tab ${activeTab==='listings'?'active':''}" id="tab-listings" role="tab" onclick="switchAdminTab('listings')">Listings (${listings.length})</button>
           <button class="admin-tab" id="tab-landlords" role="tab" onclick="switchAdminTab('landlords')">Landlords (${landlords.length})</button>
         </div>
         <div id="admin-tab-content"></div>
@@ -1355,6 +1378,14 @@ const Pages = (() => {
       const tabEl = el('tab-' + tab);
       if (tabEl) tabEl.classList.add('active');
       renderTab();
+    };
+    window.reviewPayment = async function(id, action, code) {
+      let note = '';
+      if (action === 'approve' && !confirm(`Approve ${code}? Only do this if you can see a Ksh 500 payment with this code in your M-Pesa messages.`)) return;
+      if (action === 'reject') { note = prompt(`Why are you rejecting ${code}? The tenant sees this.`, 'We couldn\'t find this payment in our M-Pesa statement.'); if (note === null) return; }
+      const r = await API.adminReviewPayment(id, action, note);
+      if (r.ok) { showToast(r.data.message, 'success'); Router.go('admin'); }
+      else showToast(r.data.error || 'That didn\'t work. Try again.', 'error');
     };
     window.adminSetStatus = async function(id, status) {
       const r = await API.updateListing(id, { status });
@@ -1388,5 +1419,5 @@ const Pages = (() => {
   // Expose adminLandlord so onclick in HTML strings can reach it
   function _adminLandlord(id) { adminLandlord(id); }
 
-  return { home, browse, counties, listing, dashboard, addListing, editListing, unlocks, profile, admin, _adminLandlord, scrollToHow };
+  return { home, browse, counties, listing, dashboard, addListing, editListing, unlocks, profile, admin, _adminLandlord, scrollToHow, footer: footerHTML };
 })();

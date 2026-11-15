@@ -187,6 +187,8 @@ const Router = (() => {
     profile:        () => Pages.profile(),
     admin:          () => Pages.admin(),
     how:            () => Pages.scrollToHow(),
+    terms:          () => Legal.terms(),
+    privacy:        () => Legal.privacy(),
   };
 
   function go(route, params = {}, fromHistory = false) {
@@ -218,6 +220,54 @@ const Router = (() => {
 /* ── Unlock module ───────────────────────────────── */
 const Unlock = (() => {
   let _listingId = null;
+  let _payCfg = null;
+
+  async function payConfig() {
+    if (!_payCfg) {
+      const r = await API.paymentConfig();
+      _payCfg = r.ok ? r.data : { manual_enabled: false };
+    }
+    return _payCfg;
+  }
+
+  /* Offer Send Money when the STK prompt fails, times out or isn't arriving */
+  async function offerManual() {
+    const cfg = await payConfig();
+    if (cfg.manual_enabled) showEl(el('unlock-manual-link'));
+  }
+  async function showManual() {
+    const cfg = await payConfig();
+    if (!cfg.manual_enabled) return;
+    if (el('manual-pay-number')) el('manual-pay-number').textContent = cfg.manual_number;
+    if (el('manual-pay-name')) el('manual-pay-name').textContent = cfg.manual_name ? ` (${cfg.manual_name})` : '';
+    const user = Auth.current() || {};
+    if (el('manual-phone') && !el('manual-phone').value) el('manual-phone').value = (el('mpesa-phone') || {}).value || user.phone || '';
+    hideEl(el('unlock-stk')); showEl(el('unlock-manual'));
+    hideEl(el('unlock-error')); hideEl(el('unlock-success'));
+    if (el('unlock-title')) el('unlock-title').textContent = 'Pay with Send Money';
+  }
+  function showStk() {
+    showEl(el('unlock-stk')); hideEl(el('unlock-manual'));
+    if (el('unlock-title')) el('unlock-title').textContent = 'Get the landlord\'s number';
+  }
+  async function submitManual() {
+    const btn = el('manual-submit-btn'); const errEl = el('unlock-error'); const sucEl = el('unlock-success');
+    const code  = ((el('manual-code') || {}).value || '').replace(/\s+/g, '').toUpperCase();
+    const phone = ((el('manual-phone') || {}).value || '').trim();
+    hideEl(errEl); hideEl(sucEl);
+    if (!/^[A-Z0-9]{10}$/.test(code)) { showEl(errEl); errEl.textContent = 'M-Pesa codes are 10 letters and numbers, like SKL3X9ABC1.'; return; }
+    if (!phone) { showEl(errEl); errEl.textContent = 'Enter the phone number you paid from.'; return; }
+    setLoading(btn, true);
+    const r = await API.manualUnlock({ listing_id: _listingId, code, phone });
+    setLoading(btn, false);
+    if (r.ok) {
+      closeAllModals();
+      showToast('Code received. The number appears here as soon as we\'ve matched your payment.', 'success');
+      Router.go('listing', { id: _listingId });
+    } else if (r.data.already_unlocked) {
+      closeAllModals(); Router.go('listing', { id: _listingId });
+    } else { showEl(errEl); errEl.textContent = r.data.error || 'That didn\'t send. Try again or WhatsApp us on +254 703 245 513.'; }
+  }
 
   function open(listingId, title) {
     const user = Auth.current();
@@ -231,6 +281,9 @@ const Unlock = (() => {
     if (el('unlock-listing-name')) el('unlock-listing-name').textContent = title || 'House listing';
     hideEl(el('unlock-error'));
     hideEl(el('unlock-success'));
+    hideEl(el('unlock-manual-link'));
+    if (el('manual-code')) el('manual-code').value = '';
+    showStk();
     const btn = el('unlock-submit-btn');
     if (btn) { showEl(btn); btn.disabled = false; btn.innerHTML = 'Pay Ksh 500 with M-Pesa'; }
     openModal('unlock-modal');
@@ -255,12 +308,14 @@ const Unlock = (() => {
       sucEl.textContent = 'Check your phone and enter your M-Pesa PIN. This page updates once the payment goes through.';
       hideEl(btn);
       pollUnlock(_listingId);
-    } else if (r.data.already_unlocked) {
+      setTimeout(() => { if (_listingId) offerManual(); }, 45000); // prompt still not here after 45s
+    } else if (r.data.already_unlocked || r.data.manual_review) {
       closeModal('unlock-modal');
       Router.go('listing', { id: _listingId });
     } else {
       showEl(errEl);
       errEl.textContent = r.data.error || 'We couldn\'t send the M-Pesa prompt. Check the number and try again.';
+      offerManual();
     }
   }
 
@@ -291,6 +346,7 @@ const Unlock = (() => {
         hideEl(sucEl);
         const btn = el('unlock-submit-btn');
         if (btn) showEl(btn);
+        offerManual();
         return;
       }
 
@@ -307,16 +363,17 @@ const Unlock = (() => {
           showEl(errEl);
           errEl.textContent = r.data.status === 'failed'
             ? 'The payment was cancelled or didn\'t go through. You haven\'t been charged, so you can try again.'
-            : 'No confirmation from M-Pesa yet. If you paid, WhatsApp us on +254 703 245 513 and we\'ll sort it out.';
+            : 'No confirmation from M-Pesa yet. If the money left your account, it will still unlock once M-Pesa confirms. If you never got a prompt, pay with Send Money below.';
         }
         hideEl(sucEl);
         const btn = el('unlock-submit-btn');
         if (btn) showEl(btn);
+        offerManual();
       }
     }, 3000);
   }
 
-  return { open, initiate };
+  return { open, initiate, showManual, showStk, submitManual };
 })();
 
 /* ── Reviews module ──────────────────────────────── */

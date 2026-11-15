@@ -17,7 +17,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const path   = window.location.pathname;
   const search = new URLSearchParams(window.location.search);
 
-  if (path === '/dashboard/new') {
+  if (path === '/terms') {
+    Router.go('terms');
+  } else if (path === '/privacy') {
+    Router.go('privacy');
+  } else if (path === '/dashboard/new') {
     Router.go('add-listing');
   } else if (path.startsWith('/dashboard/edit/')) {
     Router.go('edit-listing', { id: decodeURIComponent(path.split('/dashboard/edit/')[1]) });
