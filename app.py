@@ -528,9 +528,14 @@ def get_listing(listing_id):
         JOIN counties c ON c.id=l.county_id
         LEFT JOIN areas a ON a.id=l.area_id
         LEFT JOIN profiles p ON p.id=l.landlord_id
-        WHERE l.id=%s AND l.status='active'
+        WHERE l.id=%s
     """, (listing_id,))
     listing = cur.fetchone()
+    if listing and listing["status"] != "active":
+        # Hidden or in-review listings are visible only to their landlord and the admin (preview)
+        viewer = get_current_user()
+        if not viewer or (viewer.email != ADMIN_EMAIL and str(viewer.id) != str(listing["landlord_id"])):
+            listing = None
     if not listing: conn.close(); return jsonify({"error":"Not found"}), 404
     cur.execute("SELECT * FROM listing_media WHERE listing_id=%s ORDER BY sort_order", (listing_id,))
     media = cur.fetchall()
@@ -540,7 +545,8 @@ def get_listing(listing_id):
         WHERE r.listing_id=%s ORDER BY r.created_at DESC LIMIT 10
     """, (listing_id,))
     reviews = cur.fetchall()
-    cur.execute("UPDATE listings SET views=views+1 WHERE id=%s", (listing_id,))
+    if listing["status"] == "active":
+        cur.execute("UPDATE listings SET views=views+1 WHERE id=%s", (listing_id,))
     conn.commit(); conn.close()
     media = [{k: m[k] for k in ("id", "media_type", "url", "sort_order") if k in m} for m in media]
     reviews = [{k: r[k] for k in ("id", "rating", "comment", "created_at", "reviewer_name") if k in r} for r in reviews]

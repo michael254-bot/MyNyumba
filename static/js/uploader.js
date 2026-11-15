@@ -108,7 +108,7 @@ const Uploader = (() => {
     const bar = item.el && item.el.querySelector('.mp-bar i');
     if (bar) bar.style.width = Math.round(p * 100) + '%';
     const st = item.el && item.el.querySelector('.mp-state');
-    if (st && item.status === 'uploading') st.textContent = Math.round(p * 100) + '%';
+    if (st && item.status === 'uploading') st.textContent = p >= 0.999 ? 'Saving…' : Math.round(p * 100) + '%';
     if (item.owner && item.owner.onProgress) item.owner.onProgress();
   }
 
@@ -207,6 +207,7 @@ const Uploader = (() => {
         .sort((a, b) => (a.type === b.type ? 0 : a.type === 'photo' ? -1 : 1));
       const order = new Map(items.filter(i => i.type === 'photo').concat(items.filter(i => i.type === 'video')).map((it, k) => [it, startOrder + k]));
       const failed = [];
+      const block = grid() && grid().closest('.media-block'); if (block) block.classList.add('is-sending');
       queue.forEach(it => { it.el.classList.remove('is-error', 'is-done'); it.el.classList.add('is-queued'); const st = it.el.querySelector('.mp-state'); if (st) st.textContent = 'Waiting'; });
       async function worker() {
         while (queue.length) {
@@ -215,7 +216,10 @@ const Uploader = (() => {
           let r = await uploadOne(listingId, item, order.get(item));
           if (!r.ok) r = await uploadOne(listingId, item, order.get(item)); // one retry for flaky mobile data
           item.el.classList.remove('is-uploading');
-          if (r.ok) { item.status = 'done'; setProgress(item, 1); item.el.classList.add('is-done'); }
+          if (r.ok) {
+            item.status = 'done'; setProgress(item, 1); item.el.classList.add('is-done');
+            const st = item.el.querySelector('.mp-state'); if (st) st.textContent = '✓ Uploaded';
+          }
           else {
             item.status = 'error'; item.error = r.error; item.el.classList.add('is-error');
             const sz = item.el.querySelector('.mp-size'); if (sz) sz.textContent = 'Failed';
@@ -224,14 +228,15 @@ const Uploader = (() => {
         }
       }
       await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+      if (block) block.classList.remove('is-sending');
       return { ok: failed.length === 0, failed };
     }
 
     function totals() {
       const pending = items.filter(i => i.status !== 'done' || i.progress < 1);
-      const bytes = items.reduce((a, i) => a + (i.blob ? i.blob.size : i.origSize), 0) || 1;
-      const sent  = items.reduce((a, i) => a + (i.blob ? i.blob.size : i.origSize) * (i.progress || 0), 0);
-      return { fraction: Math.min(1, sent / bytes), done: items.filter(i => i.status === 'done').length, count: items.length, pending: pending.length };
+      // Progress by file, so the overall figure matches what the tiles show
+      const avg = items.length ? items.reduce((a, i) => a + (i.status === 'done' ? 1 : Math.min(0.95, i.progress || 0)), 0) / items.length : 0;
+      return { fraction: Math.min(1, avg), sent: items.filter(i => i.status === 'done' || (i.progress || 0) >= 0.999).length, done: items.filter(i => i.status === 'done').length, count: items.length, pending: pending.length };
     }
 
     inst.addFiles = addFiles; inst.remove = remove; inst.uploadAll = uploadAll; inst.totals = totals; inst.ready = ready;

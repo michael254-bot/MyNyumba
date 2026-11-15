@@ -576,6 +576,7 @@ const Pages = (() => {
       <span class="crumb-current">${typeLabel(l.property_type)}</span>
     </nav>
     <div class="detail-page">
+      ${l.status && l.status !== 'active' ? `<div class="form-success" style="margin-top:16px;background:var(--band);border-color:var(--line);color:var(--ink)">Preview. This listing is ${l.status === 'pending' ? 'waiting for review' : 'hidden'}, so tenants can't see it yet.</div>` : ''}
       <div class="detail-head">
         <h1 class="detail-title">${escHtml(l.title)}</h1>
         <div class="detail-loc">
@@ -602,7 +603,7 @@ const Pages = (() => {
             ${included.length
               ? `<div class="amenity-grid">${included.map(([,label,icon])=>`<div class="amenity-item"><i class="ti ${icon}"></i><span>${label}</span></div>`).join('')}</div>`
               : `<p class="text-muted">The landlord hasn't listed any amenities.</p>`}
-            ${included.length && missing.length ? `<p class="text-muted mt-16" style="font-size:15px">Not included: ${missing.map(([,label])=>label.toLowerCase()).join(', ')}.</p>` : ''}
+            ${included.length && missing.length ? `<p class="text-muted mt-16" style="font-size:15px">Not included: ${missing.map(([,label])=>label).join(', ')}.</p>` : ''}
           </section>
 
           ${nearby.length ? `<section class="detail-block"><h2>Nearby</h2><div class="nearby-grid">${nearby.map(([,label,icon])=>`<div class="nearby-item"><i class="ti ${icon}"></i><span>${label}</span></div>`).join('')}</div></section>` : ''}
@@ -723,10 +724,10 @@ const Pages = (() => {
               <span class="status-badge status-${escHtml(l.status)}">${({active:'Live',pending:'In review',inactive:'Hidden'})[l.status]||escHtml(l.status)}</span>
               <div class="lr-actions">
                 <button class="btn-ghost btn-xs" onclick="Router.go('edit-listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-edit"></i> Edit</button>
+                <button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> ${l.status==='active' ? 'View' : 'Preview'}</button>
                 ${l.status==='active'
-                  ? `<button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> View</button>
-                     <button class="btn-ghost btn-xs" onclick="setListingStatus('${jsStr(l.id)}','inactive')"><i class="ti ti-eye-off"></i> Hide</button>`
-                  : l.status==='inactive' ? `<button class="btn-ghost btn-xs" onclick="setListingStatus('${jsStr(l.id)}','active')"><i class="ti ti-eye"></i> Make live</button>` : ''}
+                  ? `<button class="btn-ghost btn-xs" onclick="setListingStatus('${jsStr(l.id)}','inactive')"><i class="ti ti-eye-off"></i> Hide</button>`
+                  : l.status==='inactive' ? `<button class="btn-ghost btn-xs" onclick="setListingStatus('${jsStr(l.id)}','active')"><i class="ti ti-check"></i> Make live</button>` : ''}
                 <button class="btn-danger btn-xs" onclick="confirmDeleteListing('${jsStr(l.id)}','${jsStr(l.title)}')"><i class="ti ti-trash"></i> Delete</button>
               </div>
             </div>`).join('')}
@@ -781,7 +782,7 @@ const Pages = (() => {
       const t = uploader.totals();
       const bar = el('up-bar'); if (bar) bar.style.width = Math.round(t.fraction * 100) + '%';
       const c = el('up-count'); if (c) c.textContent = `${t.done} of ${t.count} done`;
-      const sm = el('media-summary'); if (sm && t.done < t.count) sm.innerHTML = `<strong>Uploading ${t.done} of ${t.count}</strong>, ${Math.round(t.fraction * 100)}% sent. Keep this page open until it finishes.`;
+      const sm = el('media-summary'); if (sm && t.done < t.count) sm.innerHTML = `<strong>Uploading, ${Math.round(t.fraction * 100)}% done</strong> (${t.sent} of ${t.count} sent). Keep this page open until it finishes.`;
     };
     uploader.onProgress();
     const res = await uploader.uploadAll(listingId, startOrder);
@@ -808,7 +809,7 @@ const Pages = (() => {
             <button class="back-btn" onclick="Router.go('dashboard')" aria-label="Back to your listings"><i class="ti ti-arrow-left"></i></button>
             <h1>Add a listing</h1>
           </div>
-          <p class="page-lede">Tenants see everything here except your phone number, which they pay to unlock.</p>
+          <p class="page-lede">Tenants see everything here except your phone number and street address, which they pay Ksh 500 to unlock.</p>
           <form id="add-listing-form" onsubmit="submitAddListing(event)" novalidate>
             <div class="form-panel">
               <h2 class="form-panel-title">Photos and video</h2>
@@ -1094,9 +1095,8 @@ const Pages = (() => {
       <div class="dash-content">
         <div class="form-page">
           <div class="page-header"><h1>Profile</h1></div>
-          <p class="page-lede">${accountType} account. We send M-Pesa prompts to this number${u.role === 'landlord' ? ', and it\'s what tenants get after they pay to contact you' : ''}.</p>
+          <p class="page-lede">${accountType} account. ${u.role === 'landlord' || u.is_admin ? 'Tenants get this phone number after they pay to contact you.' : 'We send M-Pesa payment prompts to this number.'}</p>
           <div class="form-panel">
-            <h2 class="form-panel-title">Your details</h2>
             <div class="form-group"><label for="p-name">Full name</label><input type="text" id="p-name" value="${escHtml(u.full_name||'')}" autocomplete="name"/></div>
             <div class="form-row">
               <div class="form-group"><label for="p-phone">M-Pesa phone number</label><input type="tel" id="p-phone" value="${escHtml(u.phone||'')}" placeholder="07XX XXX XXX" autocomplete="tel"/></div>
@@ -1186,7 +1186,7 @@ const Pages = (() => {
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:32px">
           <button class="btn-danger btn-sm" onclick="adminSuspendLandlord('${lid}')"><i class="ti ti-user-off"></i> Suspend and hide all listings</button>
-          <button class="btn-green btn-sm" onclick="adminRestoreLandlord('${lid}')"><i class="ti ti-user-check"></i> Make all listings live again</button>
+          <button class="btn-ghost btn-sm" onclick="adminRestoreLandlord('${lid}')"><i class="ti ti-user-check"></i> Make all listings live again</button>
         </div>
         <div class="list-head"><h3>Their listings</h3></div>
         <div id="landlord-listings-container">${rows}</div>
@@ -1243,10 +1243,10 @@ const Pages = (() => {
         </div>
         <span class="status-badge status-${escHtml(l.status)}">${({active:'Live',pending:'In review',inactive:'Hidden'})[l.status]||escHtml(l.status)}</span>
         <div class="lr-actions">
+          <button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> ${l.status === 'active' ? 'View' : 'Preview'}</button>
           ${l.status === 'active'
-            ? `<button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> View</button>
-               <button class="btn-ghost btn-xs" onclick="adminSetStatus('${jsStr(l.id)}','inactive')"><i class="ti ti-eye-off"></i> Hide</button>`
-            : `<button class="btn-green btn-xs" onclick="adminSetStatus('${jsStr(l.id)}','active')"><i class="ti ti-check"></i> ${l.status === 'pending' ? 'Approve' : 'Make live'}</button>`}
+            ? `<button class="btn-ghost btn-xs" onclick="adminSetStatus('${jsStr(l.id)}','inactive')"><i class="ti ti-eye-off"></i> Hide</button>`
+            : `<button class="btn-ghost btn-xs" onclick="adminSetStatus('${jsStr(l.id)}','active')"><i class="ti ti-check"></i> ${l.status === 'pending' ? 'Approve' : 'Make live'}</button>`}
           <button class="btn-danger btn-xs" onclick="adminDeleteListing('${jsStr(l.id)}')"><i class="ti ti-trash"></i> Delete</button>
         </div>
       </div>`;
