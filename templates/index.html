@@ -198,6 +198,30 @@
   </form>
 </div>
 
+<!-- ══ REPORT MODAL ══════════════════════════════════════════════════════════ -->
+<div class="modal hidden" id="report-modal" role="dialog" aria-modal="true" aria-labelledby="report-title">
+  <div class="modal-header">
+    <h2 id="report-title">Report a problem</h2>
+    <button class="modal-close" onclick="closeModal('report-modal')" aria-label="Close"><i class="ti ti-x"></i></button>
+  </div>
+  <p class="modal-sub">We check every report. If two tenants report the same house, it's hidden until the landlord confirms it's still available.</p>
+  <form id="report-form" onsubmit="Reports.submit(event)">
+    <div class="form-group">
+      <div class="report-options">
+        <label class="chk-item"><input type="radio" name="report-reason" value="taken"/> The house is already taken</label>
+        <label class="chk-item"><input type="radio" name="report-reason" value="wrong_number"/> The number is wrong or off</label>
+        <label class="chk-item"><input type="radio" name="report-reason" value="other"/> Something else</label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="report-note">Details <span class="optional">optional</span></label>
+      <textarea id="report-note" rows="3" placeholder="When did you call? What did the landlord say?"></textarea>
+    </div>
+    <div id="report-error" class="form-error hidden"></div>
+    <button type="submit" class="btn-primary btn-block">Send report</button>
+  </form>
+</div>
+
 <script src="/static/js/api.js?v={{ v }}" defer></script>
 <script src="/static/js/auth.js?v={{ v }}" defer></script>
 <script src="/static/js/ui.js?v={{ v }}" defer></script>

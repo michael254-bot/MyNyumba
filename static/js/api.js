@@ -40,6 +40,8 @@ const API = (() => {
     createListing: (data) => req('POST', '/api/listings', data),
     updateListing: (id, data) => req('PUT', `/api/listings/${id}`, data),
     deleteListing: (id) => req('DELETE', `/api/listings/${id}`),
+    confirmListing: (id) => req('POST', `/api/listings/${id}/confirm`),
+    reportListing:  (id, data) => req('POST', `/api/listings/${id}/report`, data),
     // Landlord
     landlordListings: () => req('GET', '/api/landlord/listings'),
     // Media

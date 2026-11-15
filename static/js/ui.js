@@ -361,3 +361,31 @@ document.addEventListener('keydown', e => {
   if (document.querySelector('.lightbox')) return; // lightbox handles its own Escape
   closeAllModals(); closeUserMenu(); closeMobileMenu();
 });
+
+/* ── Reports module (tenant says a house is taken / number is wrong) ── */
+const Reports = (() => {
+  let _listingId = null;
+  function open(listingId) {
+    if (!Auth.current()) { openModal('login-modal'); return; }
+    _listingId = listingId;
+    document.querySelectorAll('input[name="report-reason"]').forEach(r => { r.checked = false; });
+    if (el('report-note')) el('report-note').value = '';
+    hideEl(el('report-error'));
+    openModal('report-modal');
+  }
+  async function submit(e) {
+    e.preventDefault();
+    const picked = document.querySelector('input[name="report-reason"]:checked');
+    const errEl = el('report-error');
+    if (!picked) { showEl(errEl); errEl.textContent = 'Pick what went wrong.'; return; }
+    const btn = e.submitter; setLoading(btn, true);
+    const r = await API.reportListing(_listingId, { reason: picked.value, note: (el('report-note') || {}).value || '' });
+    setLoading(btn, false);
+    if (r.ok) {
+      closeAllModals();
+      showToast(r.data.listing_hidden ? 'Thanks. Other tenants reported this too, so it\'s hidden until the landlord confirms.' : 'Thanks. We\'ll look into it.', 'success');
+      Router.refresh();
+    } else { showEl(errEl); errEl.textContent = r.data.error || 'Your report didn\'t send. Try again.'; }
+  }
+  return { open, submit };
+})();

@@ -534,7 +534,12 @@ def get_listing(listing_id):
     if listing and listing["status"] != "active":
         # Hidden or in-review listings are visible only to their landlord and the admin (preview)
         viewer = get_current_user()
-        if not viewer or (viewer.email != ADMIN_EMAIL and str(viewer.id) != str(listing["landlord_id"])):
+        allowed = viewer and (viewer.email == ADMIN_EMAIL or str(viewer.id) == str(listing["landlord_id"]))
+        if viewer and not allowed and listing["status"] in ("let", "archived", "inactive"):
+            # A tenant who already paid keeps access, so they can see it's been let
+            cur.execute("SELECT 1 FROM unlocks WHERE tenant_id=%s AND listing_id=%s AND status='completed'", (str(viewer.id), listing_id))
+            allowed = cur.fetchone() is not None
+        if not allowed:
             listing = None
     if not listing: conn.close(); return jsonify({"error":"Not found"}), 404
     cur.execute("SELECT * FROM listing_media WHERE listing_id=%s ORDER BY sort_order", (listing_id,))
@@ -622,7 +627,8 @@ def update_listing(user, listing_id):
                  "has_lift","near_school","near_hospital","near_market","near_matatu",
                  "near_church","near_water_kiosk"]
     updates = {k: data[k] for k in updatable if k in data}
-    if "status" in updates and updates["status"] not in (("active","inactive","pending") if is_admin else ("active","inactive")):
+    allowed_status = ("active","inactive","pending","let","archived") if is_admin else ("active","inactive","let")
+    if "status" in updates and updates["status"] not in allowed_status:
         conn.close(); return jsonify({"error":"Invalid status"}), 400
     try:
         for k in ("monthly_rent","deposit_months"):
@@ -631,7 +637,16 @@ def update_listing(user, listing_id):
         conn.close(); return jsonify({"error":"Rent and deposit must be numbers"}), 400
     if not updates: conn.close(); return jsonify({"error":"Nothing to update"}), 400
     set_clause = ", ".join(f"{k}=%s" for k in updates)
-    cur.execute(f"UPDATE listings SET {set_clause} WHERE id=%s", list(updates.values())+[listing_id])
+    extra = ""
+    new_status = updates.get("status")
+    if new_status == "let":
+        extra = ", let_at=NOW(), auto_hidden_reason=NULL"
+    elif new_status == "active":
+        # Going live (or relisting) counts as confirming the house is available
+        extra = ", let_at=NULL, auto_hidden_reason=NULL, last_confirmed_at=NOW()"
+    cur.execute(f"UPDATE listings SET {set_clause}{extra} WHERE id=%s", list(updates.values())+[listing_id])
+    if new_status in ("active", "let"):
+        cur.execute("UPDATE listing_reports SET resolved_at=NOW() WHERE listing_id=%s AND resolved_at IS NULL", (listing_id,))
     conn.commit(); conn.close()
     return jsonify({"message":"Updated"}), 200
 
@@ -659,7 +674,9 @@ def landlord_listings(user):
         SELECT l.*, c.name AS county_name, a.name AS area_name,
                (SELECT COUNT(*) FROM listing_media WHERE listing_id=l.id AND media_type='photo') AS photo_count,
                (SELECT COUNT(*) FROM listing_media WHERE listing_id=l.id AND media_type='video') AS video_count,
-               (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo
+               (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo,
+               (SELECT COUNT(*) FROM listing_reports r WHERE r.listing_id=l.id AND r.resolved_at IS NULL) AS open_reports,
+               EXTRACT(DAY FROM NOW() - COALESCE(l.last_confirmed_at, l.created_at))::int AS days_since_confirmed
         FROM listings l
         JOIN counties c ON c.id=l.county_id
         LEFT JOIN areas a ON a.id=l.area_id
@@ -684,14 +701,17 @@ def admin_listings(user):
     cur.execute("""
         SELECT l.*, c.name AS county_name, a.name AS area_name,
                p.full_name AS landlord_name, p.phone AS landlord_phone,
-               p.email AS landlord_email, p.id_number AS landlord_id_number,
+               au.email AS landlord_email, p.id_number AS landlord_id_number,
                p.location AS landlord_location,
-               (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo
+               (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo,
+               (SELECT COUNT(*) FROM listing_reports r WHERE r.listing_id=l.id AND r.resolved_at IS NULL) AS open_reports,
+               (SELECT string_agg(DISTINCT r.reason, ',') FROM listing_reports r WHERE r.listing_id=l.id AND r.resolved_at IS NULL) AS report_reasons
         FROM listings l
         JOIN counties c ON c.id=l.county_id
         LEFT JOIN areas a ON a.id=l.area_id
         LEFT JOIN profiles p ON p.id=l.landlord_id
-        ORDER BY l.created_at DESC
+        LEFT JOIN auth.users au ON au.id=l.landlord_id
+        ORDER BY (SELECT COUNT(*) FROM listing_reports r WHERE r.listing_id=l.id AND r.resolved_at IS NULL) DESC, l.created_at DESC
     """)
     listings = cur.fetchall(); conn.close()
     return jsonify([dict(l) for l in listings]), 200
@@ -777,7 +797,8 @@ def admin_stats(user):
           (SELECT COUNT(*) FROM listings) AS total_listings,
           (SELECT COUNT(*) FROM profiles WHERE role='landlord') AS landlords,
           (SELECT COUNT(*) FROM profiles WHERE role='tenant') AS tenants,
-          (SELECT COUNT(*) FROM unlocks WHERE status='completed') AS total_unlocks
+          (SELECT COUNT(*) FROM unlocks WHERE status='completed') AS total_unlocks,
+          (SELECT COUNT(DISTINCT listing_id) FROM listing_reports WHERE resolved_at IS NULL) AS reported_listings
     """)
     stats = cur.fetchone(); conn.close()
     return jsonify(dict(stats) if stats else {}), 200
@@ -927,6 +948,106 @@ def delete_media(user, listing_id, media_id):
         try: supabase_admin.storage.from_(MEDIA_BUCKET).remove([deleted["storage_path"]])
         except: pass
     return jsonify({"message":"Deleted"}), 200
+
+# ── HOUSE TAKEN: confirmations, tenant reports, automatic clean-up ───────────
+CONFIRM_EVERY_DAYS = 30   # dashboard asks "Still available?" after this
+CONFIRM_GRACE_DAYS = 7    # ...and hides the listing if nobody answers within this
+ARCHIVE_LET_DAYS   = 90   # let listings move to the archive after this
+REPORTS_TO_HIDE    = 2    # tenant reports that hide a listing until the landlord confirms
+
+@app.route("/api/listings/<listing_id>/confirm", methods=["POST"])
+@require_landlord
+def confirm_available(user, listing_id):
+    """Landlord says: yes, still available. Resets the 30-day clock (and brings back an auto-hidden listing)."""
+    conn = get_db(); cur = conn.cursor()
+    if not _can_edit_listing(cur, user, listing_id):
+        conn.close(); return jsonify({"error": "Not found"}), 404
+    cur.execute("""
+        UPDATE listings SET last_confirmed_at=NOW(),
+               status = CASE WHEN status='inactive' AND auto_hidden_reason IS NOT NULL THEN 'active' ELSE status END,
+               auto_hidden_reason = NULL
+        WHERE id=%s RETURNING status
+    """, (listing_id,))
+    row = cur.fetchone()
+    cur.execute("UPDATE listing_reports SET resolved_at=NOW() WHERE listing_id=%s AND resolved_at IS NULL", (listing_id,))
+    conn.commit(); conn.close()
+    return jsonify({"message": "Confirmed", "status": row["status"]}), 200
+
+@app.route("/api/listings/<listing_id>/report", methods=["POST"])
+@require_auth
+def report_listing(user, listing_id):
+    """A tenant who paid for this house reports it as taken or the number as wrong."""
+    data   = request.json or {}
+    reason = data.get("reason")
+    note   = str(data.get("note") or "").strip()[:500]
+    if reason not in ("taken", "wrong_number", "other"):
+        return jsonify({"error": "Pick a reason"}), 400
+    if _rate_limited(f"report:{user.id}", 10, 3600):
+        return jsonify({"error": "Too many reports. Try again later."}), 429
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT 1 FROM unlocks WHERE tenant_id=%s AND listing_id=%s AND status='completed'", (str(user.id), listing_id))
+    if not cur.fetchone():
+        conn.close(); return jsonify({"error": "Only tenants who unlocked this house can report it."}), 403
+    cur.execute("""
+        INSERT INTO listing_reports (listing_id, tenant_id, reason, note) VALUES (%s,%s,%s,%s)
+        ON CONFLICT (listing_id, tenant_id) DO UPDATE SET reason=EXCLUDED.reason, note=EXCLUDED.note, created_at=NOW(), resolved_at=NULL
+    """, (listing_id, str(user.id), reason, note))
+    cur.execute("""
+        SELECT COUNT(*) AS n FROM listing_reports
+        WHERE listing_id=%s AND resolved_at IS NULL AND reason IN ('taken','wrong_number')
+    """, (listing_id,))
+    hidden = False
+    if cur.fetchone()["n"] >= REPORTS_TO_HIDE:
+        cur.execute("""
+            UPDATE listings SET status='inactive', auto_hidden_reason='reported'
+            WHERE id=%s AND status='active' RETURNING id
+        """, (listing_id,))
+        hidden = cur.fetchone() is not None
+    conn.commit(); conn.close()
+    return jsonify({"message": "Report received", "listing_hidden": hidden}), 201
+
+_last_maintenance = 0
+_maintenance_lock = threading.Lock()
+
+def run_listing_maintenance(force=False):
+    """Hide listings nobody has confirmed in 37 days and archive listings let 90+ days ago.
+    Runs inside normal requests at most every 15 minutes, so no cron job is needed."""
+    global _last_maintenance
+    now = time.time()
+    if not force and now - _last_maintenance < 900:
+        return None
+    if not _maintenance_lock.acquire(blocking=False):
+        return None
+    try:
+        _last_maintenance = now
+        conn = get_db(); cur = conn.cursor()
+        cur.execute(f"""
+            UPDATE listings SET status='inactive', auto_hidden_reason='not_confirmed'
+            WHERE status='active'
+              AND COALESCE(last_confirmed_at, created_at) < NOW() - INTERVAL '{CONFIRM_EVERY_DAYS + CONFIRM_GRACE_DAYS} days'
+            RETURNING id
+        """)
+        hidden = len(cur.fetchall())
+        cur.execute(f"""
+            UPDATE listings SET status='archived'
+            WHERE status='let' AND let_at < NOW() - INTERVAL '{ARCHIVE_LET_DAYS} days'
+            RETURNING id
+        """)
+        archived = len(cur.fetchall())
+        conn.commit(); conn.close()
+        if hidden or archived:
+            print(f"MAINTENANCE: hid {hidden} unconfirmed, archived {archived} let listings")
+        return {"hidden": hidden, "archived": archived}
+    except Exception as e:
+        print("MAINTENANCE ERROR:", e)
+        return None
+    finally:
+        _maintenance_lock.release()
+
+@app.before_request
+def _maybe_maintain():
+    if request.path.startswith("/api/listings") and request.method == "GET":
+        run_listing_maintenance()
 
 # ── UNLOCKS ───────────────────────────────────────────────────────────────────
 # Payment flow (PayHero STK push):
@@ -1185,6 +1306,8 @@ def my_unlocks(user):
     conn = get_db(); cur = conn.cursor()
     cur.execute("""
         SELECT u.*,l.id AS listing_id,l.title,c.name AS county_name,a.name AS area_name,l.monthly_rent,l.property_type,
+               l.status AS listing_status,
+               EXISTS (SELECT 1 FROM listing_reports r WHERE r.listing_id=l.id AND r.tenant_id=u.tenant_id) AS reported,
                (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo
         FROM unlocks u JOIN listings l ON l.id=u.listing_id
         JOIN counties c ON c.id=l.county_id

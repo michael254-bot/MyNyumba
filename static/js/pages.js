@@ -28,6 +28,15 @@ const Pages = (() => {
     ['cctv=true','CCTV'],['borehole=true','Borehole'],['generator=true','Generator'],
     ['pet_friendly=true','Pets allowed'],['pool=true','Pool']];
 
+  const STATUS_LABEL = { active:'Live', pending:'In review', inactive:'Hidden', let:'Let', archived:'Archived', rejected:'Rejected' };
+  const statusLabel = st => STATUS_LABEL[st] || escHtml(st);
+  function hiddenReason(l) {
+    if (l.status !== 'inactive') return '';
+    if (l.auto_hidden_reason === 'reported') return 'Hidden because tenants reported it taken. Confirm it\'s available to bring it back.';
+    if (l.auto_hidden_reason === 'not_confirmed') return 'Hidden because it wasn\'t confirmed for over 30 days.';
+    return '';
+  }
+
   function typeOptions(selected = '', anyLabel = 'Any type') {
     return `<option value="">${anyLabel}</option>` +
       PROPERTY_TYPES.map(([v,l]) => `<option value="${v}" ${selected===v?'selected':''}>${l}</option>`).join('');
@@ -545,7 +554,7 @@ const Pages = (() => {
     const depositText = `${formatPrice(l.monthly_rent * l.deposit_months)} (${l.deposit_months} month${l.deposit_months>1?'s':''})`;
     const facts = [
       ['Deposit', depositText],
-      ['Move in', 'Available now'],
+      ['Move in', l.status === 'active' ? 'Available now' : 'No longer available'],
       ['Listed', timeAgo(l.created_at)],
     ];
 
@@ -561,6 +570,7 @@ const Pages = (() => {
           ${ld.landlord_phone ? `<a class="btn-primary" href="tel:${escHtml(String(ld.landlord_phone).replace(/\s/g,''))}"><i class="ti ti-phone"></i> Call ${escHtml(ld.landlord_name ? ld.landlord_name.split(' ')[0] : 'the landlord')}</a>` : ''}
           ${phoneDigits ? `<a class="btn-whatsapp" href="https://wa.me/${phoneDigits}" target="_blank" rel="noopener"><i class="ti ti-brand-whatsapp"></i> WhatsApp</a>` : ''}
         </div>
+        <button class="report-link" onclick="Reports.open('${jsStr(l.id)}')">Already taken or wrong number? Tell us</button>
         ${ld.landlord_email ? `<p class="book-note">Or email <a href="mailto:${escHtml(ld.landlord_email)}" style="text-decoration:underline">${escHtml(ld.landlord_email)}</a></p>` : ''}
       </div>` : `
       <div class="contact-lock-panel">
@@ -576,7 +586,11 @@ const Pages = (() => {
       <span class="crumb-current">${typeLabel(l.property_type)}</span>
     </nav>
     <div class="detail-page">
-      ${l.status && l.status !== 'active' ? `<div class="form-success" style="margin-top:16px;background:var(--band);border-color:var(--line);color:var(--ink)">Preview. This listing is ${l.status === 'pending' ? 'waiting for review' : 'hidden'}, so tenants can't see it yet.</div>` : ''}
+      ${l.status && l.status !== 'active'
+        ? (isUnlocked && (l.status === 'let' || l.status === 'archived' || l.status === 'inactive')
+            ? `<div class="let-banner"><strong>${l.status === 'inactive' ? 'This house is off the market for now.' : 'This house has been let.'}</strong> It's no longer in search. The landlord's details stay here for your records.</div>`
+            : `<div class="let-banner">Preview. This listing is ${({pending:'waiting for review', let:'marked as let', archived:'archived', inactive:'hidden'})[l.status] || 'not live'}, so tenants can't find it in search.</div>`)
+        : ''}
       <div class="detail-head">
         <h1 class="detail-title">${escHtml(l.title)}</h1>
         <div class="detail-loc">
@@ -590,7 +604,7 @@ const Pages = (() => {
           <div class="detail-summary">
             <h2>${typeLabel(l.property_type)}${l.floor ? `, ${escHtml(l.floor)} floor` : ''}</h2>
             <div class="detail-tags">
-              <span class="dtag green">Available now</span>
+              <span class="dtag green">${l.status === 'active' ? 'Available now' : statusLabel(l.status)}</span>
               <span class="dtag">Deposit ${depositText}</span>
               <span class="dtag">${Number(l.views||0).toLocaleString()} views</span>
             </div>
@@ -635,12 +649,12 @@ const Pages = (() => {
         </aside>
       </div>
     </div>
-    ${isUnlocked ? '' : `<div class="mobile-book-bar">
+    ${isUnlocked || l.status !== 'active' ? '' : `<div class="mobile-book-bar">
       <div style="min-width:0"><div class="detail-price">${formatPrice(l.monthly_rent)}<small>/month</small></div><small class="dep">Deposit ${formatPrice(l.monthly_rent * l.deposit_months)}</small></div>
       <button class="btn-primary" onclick="Unlock.open('${jsStr(l.id)}','${jsStr(l.title)}')">Get number (Ksh 500)</button>
     </div>`}
     ${footerHTML()}`;
-    app().classList.toggle('has-book-bar', !isUnlocked);
+    app().classList.toggle('has-book-bar', !isUnlocked && l.status === 'active');
 
     /* Full-screen viewer for photos and video */
     window.openLightbox = (start) => {
@@ -692,6 +706,7 @@ const Pages = (() => {
     if (!r.ok) { app().innerHTML = emptyState('ti-alert-circle','Couldn\'t load your listings',r.data.error||'Check your connection and try again.','Try again',"Router.go('dashboard')"); return; }
     const { listings, stats } = r.data;
     const s = stats || {};
+    const needsCheck = listings.filter(l => (l.status === 'active' && (l.days_since_confirmed || 0) >= 30) || (l.status === 'active' && l.open_reports > 0) || (l.status === 'inactive' && l.auto_hidden_reason));
 
     app().innerHTML = `
     <div class="dash-layout">
@@ -706,10 +721,17 @@ const Pages = (() => {
         </div>
         <div class="metrics-row">
           <div class="metric-card"><strong>${s.active||0}</strong><span>Live</span></div>
-          <div class="metric-card"><strong>${s.pending||0}</strong><span>Waiting for review</span></div>
+          <div class="metric-card"><strong>${listings.filter(l => l.status === 'let' || l.status === 'archived').length}</strong><span>Let</span></div>
           <div class="metric-card"><strong>${Number(s.total_views||0).toLocaleString()}</strong><span>Views</span></div>
           <div class="metric-card"><strong>${Number(s.total_unlocks||0).toLocaleString()}</strong><span>Tenants who unlocked</span></div>
         </div>
+        ${needsCheck.length ? `<div class="notice">
+          <h3>Are these still available?</h3>
+          <p>It's been a month since you confirmed ${needsCheck.length === 1 ? 'this house' : 'these houses'}. Unconfirmed listings are hidden after 37 days, so tenants don't pay for houses that are gone.</p>
+          ${needsCheck.map(l => `<div class="notice-row"><div><strong>${escHtml(l.title)}</strong>${l.open_reports ? `<div class="row-note warn">${l.open_reports} tenant${l.open_reports!=1?'s':''} reported it taken</div>` : ''}</div>
+            <div><button class="btn-ghost btn-xs" onclick="confirmAvailable('${jsStr(l.id)}')"><i class="ti ti-check"></i> Still available</button>
+            <button class="btn-ghost btn-xs" onclick="setListingStatus('${jsStr(l.id)}','let')"><i class="ti ti-key"></i> It's been let</button></div></div>`).join('')}
+        </div>` : ''}
         <div class="list-head"><h3>All houses</h3><span>${listings.length} listing${listings.length!==1?'s':''}</span></div>
         ${listings.length === 0
           ? emptyState('ti-home','You haven\'t listed a house yet','It takes about five minutes. Have a few photos of the house ready.','Add your first listing',"Router.go('add-listing')")
@@ -720,23 +742,32 @@ const Pages = (() => {
                 <h4>${escHtml(l.title)}</h4>
                 <p>${placeLine(l.area_name, l.county_name)}, ${formatPrice(l.monthly_rent)} a month</p>
                 <p>${Number(l.views||0).toLocaleString()} views, ${l.unlock_count||0} unlocks, ${l.photo_count||0} photo${l.photo_count!=1?'s':''}</p>
+                ${hiddenReason(l) ? `<div class="row-note warn">${hiddenReason(l)}</div>` : ''}
               </div>
-              <span class="status-badge status-${escHtml(l.status)}">${({active:'Live',pending:'In review',inactive:'Hidden'})[l.status]||escHtml(l.status)}</span>
+              <span class="status-badge status-${escHtml(l.status)}">${statusLabel(l.status)}</span>
               <div class="lr-actions">
                 <button class="btn-ghost btn-xs" onclick="Router.go('edit-listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-edit"></i> Edit</button>
                 <button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> ${l.status==='active' ? 'View' : 'Preview'}</button>
                 ${l.status==='active'
-                  ? `<button class="btn-ghost btn-xs" onclick="setListingStatus('${jsStr(l.id)}','inactive')"><i class="ti ti-eye-off"></i> Hide</button>`
-                  : l.status==='inactive' ? `<button class="btn-ghost btn-xs" onclick="setListingStatus('${jsStr(l.id)}','active')"><i class="ti ti-check"></i> Make live</button>` : ''}
+                  ? `<button class="btn-ghost btn-xs" onclick="setListingStatus('${jsStr(l.id)}','let')"><i class="ti ti-key"></i> Mark as let</button>`
+                  : (l.status==='let' || l.status==='archived') ? `<button class="btn-ghost btn-xs" onclick="setListingStatus('${jsStr(l.id)}','active')"><i class="ti ti-refresh"></i> Relist</button>`
+                  : l.status==='inactive' ? `<button class="btn-ghost btn-xs" onclick="${l.auto_hidden_reason ? `confirmAvailable('${jsStr(l.id)}')` : `setListingStatus('${jsStr(l.id)}','active')`}"><i class="ti ti-check"></i> Make live</button>` : ''}
                 <button class="btn-danger btn-xs" onclick="confirmDeleteListing('${jsStr(l.id)}','${jsStr(l.title)}')"><i class="ti ti-trash"></i> Delete</button>
               </div>
             </div>`).join('')}
       </div>
     </div>`;
 
+    window.confirmAvailable = async id => {
+      const r = await API.confirmListing(id);
+      if (r.ok) { showToast('Thanks. It stays live for another 30 days.', 'success'); Router.go('dashboard'); }
+      else showToast(r.data.error || 'That didn\'t work. Try again.', 'error');
+    };
     window.setListingStatus = async (id, status) => {
+      if (status === 'let' && !confirm('Mark this house as let? It leaves search straight away. Tenants who already paid will see it\'s been let. You can relist it when it\'s vacant again.')) return;
       const r = await API.updateListing(id, { status });
-      if (r.ok) { showToast(status === 'active' ? 'Listing is live again.' : 'Listing hidden. Tenants can\'t see it until you make it live.', 'success'); Router.go('dashboard'); }
+      const msg = { active: 'Listing is live again.', let: 'Marked as let. Relist it any time it\'s vacant.', inactive: 'Listing hidden.' }[status] || 'Saved.';
+      if (r.ok) { showToast(msg, 'success'); Router.go('dashboard'); }
       else showToast(r.data.error || 'That didn\'t work. Try again.', 'error');
     };
     window.confirmDeleteListing = async (id, title) => {
@@ -990,7 +1021,9 @@ const Pages = (() => {
                 <div class="form-group"><label for="el-status">Visibility</label>
                   <select id="el-status">
                     <option value="active" ${l.status==='active'?'selected':''}>Live, tenants can see it</option>
-                    <option value="inactive" ${l.status==='inactive'?'selected':''}>Hidden, for example once it's let</option>
+                    <option value="let" ${l.status==='let'||l.status==='archived'?'selected':''}>Let, the house has been taken</option>
+                    <option value="inactive" ${l.status==='inactive'?'selected':''}>Hidden for now</option>
+                    ${l.status==='pending' ? `<option value="pending" selected>In review</option>` : ''}
                   </select>
                 </div>
               </div>
@@ -1078,7 +1111,7 @@ const Pages = (() => {
               <div class="unlock-card-info">
                 <h4>${escHtml(u.title)}</h4>
                 <p>${placeLine(u.area_name, u.county_name)}, ${formatPrice(u.monthly_rent)} a month, ${typeLabel(u.property_type).toLowerCase()}</p>
-                <p>Unlocked ${timeAgo(u.completed_at).toLowerCase()}</p>
+                <p>Unlocked ${timeAgo(u.completed_at).toLowerCase()}${u.listing_status === 'let' || u.listing_status === 'archived' ? '. <strong style="color:var(--ink)">Now let</strong>' : u.listing_status === 'inactive' ? '. Off the market for now' : ''}${u.reported ? '. You reported this one' : ''}</p>
               </div>
               <button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(u.listing_id)}'})"><i class="ti ti-phone"></i> See contact</button>
             </div>`).join('')}
@@ -1158,7 +1191,7 @@ const Pages = (() => {
             <p>${placeLine(l.area_name, l.county_name)}, ${formatPrice(l.monthly_rent)} a month</p>
             <p>${l.views} views, ${l.unlock_count} unlocks, ${l.photo_count} photos, listed ${timeAgo(l.created_at).toLowerCase()}</p>
           </div>
-          <span class="status-badge status-${escHtml(l.status)}">${({active:'Live',pending:'In review',inactive:'Hidden'})[l.status]||escHtml(l.status)}</span>
+          <span class="status-badge status-${escHtml(l.status)}">${statusLabel(l.status)}</span>
           <div class="lr-actions">
             <button class="btn-ghost btn-xs" onclick="Router.go('edit-listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-edit"></i> Edit</button>
             ${l.status === 'active'
@@ -1249,13 +1282,15 @@ const Pages = (() => {
           <h4>${escHtml(l.title)}</h4>
           <p>${placeLine(l.area_name, l.county_name)}, ${formatPrice(l.monthly_rent)} a month</p>
           <p>${escHtml(l.landlord_name || 'Unknown landlord')}${l.landlord_phone ? ', ' + escHtml(l.landlord_phone) : ''}. ${l.views} views, ${l.unlock_count} unlocks</p>
+          ${l.open_reports ? `<div class="row-note warn">${l.open_reports} open report${l.open_reports!=1?'s':''}: ${escHtml(String(l.report_reasons||'').replace(/wrong_number/g,'wrong number').replace(/,/g,', '))}</div>` : ''}
+          ${hiddenReason(l) ? `<div class="row-note">${hiddenReason(l)}</div>` : ''}
         </div>
-        <span class="status-badge status-${escHtml(l.status)}">${({active:'Live',pending:'In review',inactive:'Hidden'})[l.status]||escHtml(l.status)}</span>
+        <span class="status-badge status-${escHtml(l.status)}">${statusLabel(l.status)}</span>
         <div class="lr-actions">
           <button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> ${l.status === 'active' ? 'View' : 'Preview'}</button>
           ${l.status === 'active'
-            ? `<button class="btn-ghost btn-xs" onclick="adminSetStatus('${jsStr(l.id)}','inactive')"><i class="ti ti-eye-off"></i> Hide</button>`
-            : `<button class="btn-ghost btn-xs" onclick="adminSetStatus('${jsStr(l.id)}','active')"><i class="ti ti-check"></i> ${l.status === 'pending' ? 'Approve' : 'Make live'}</button>`}
+            ? `<button class="btn-ghost btn-xs" onclick="adminSetStatus('${jsStr(l.id)}','let')"><i class="ti ti-key"></i> Mark as let</button>`
+            : `<button class="btn-ghost btn-xs" onclick="adminSetStatus('${jsStr(l.id)}','active')"><i class="ti ti-check"></i> ${l.status === 'pending' ? 'Approve' : (l.status === 'let' || l.status === 'archived') ? 'Relist' : 'Make live'}</button>`}
           <button class="btn-danger btn-xs" onclick="adminDeleteListing('${jsStr(l.id)}')"><i class="ti ti-trash"></i> Delete</button>
         </div>
       </div>`;
@@ -1304,6 +1339,7 @@ const Pages = (() => {
           <div class="admin-stat"><strong>${stats.landlords||0}</strong><span>Landlords</span></div>
           <div class="admin-stat"><strong>${stats.tenants||0}</strong><span>Tenants</span></div>
           <div class="admin-stat"><strong>${stats.total_unlocks||0}</strong><span>Paid unlocks</span></div>
+          <div class="admin-stat"><strong>${stats.reported_listings||0}</strong><span>Reported houses</span></div>
         </div>
         <div class="admin-tabs" role="tablist">
           <button class="admin-tab active" id="tab-listings" role="tab" onclick="switchAdminTab('listings')">Listings (${listings.length})</button>
@@ -1322,7 +1358,7 @@ const Pages = (() => {
     };
     window.adminSetStatus = async function(id, status) {
       const r = await API.updateListing(id, { status });
-      if (r.ok) { showToast(status === 'active' ? 'Listing is live.' : 'Listing hidden.', 'success'); Router.go('admin'); }
+      if (r.ok) { showToast({ active: 'Listing is live.', let: 'Marked as let.', inactive: 'Listing hidden.' }[status] || 'Saved.', 'success'); Router.go('admin'); }
       else showToast(r.data.error || 'That didn\'t work. Try again.', 'error');
     };
     window.adminDeleteListing = async function(id) {
