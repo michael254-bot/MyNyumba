@@ -272,7 +272,8 @@ def register():
         return jsonify({"error":"Invalid role"}), 400
     if len(password) < 6:
         return jsonify({"error":"Use at least 6 characters for your password"}), 400
-    if _rate_limited(f"register:{_client_ip()}", 10, 3600):
+    ip = _client_ip()
+    if ip and _rate_limited(f"register:{ip}", 10, 3600):
         return jsonify({"error":"Too many sign-ups from this network. Try again later."}), 429
 
     # Admin email always gets admin role
@@ -310,7 +311,8 @@ def login():
     password = data.get("password","")
     if not email or not password:
         return jsonify({"error":"Email and password required"}), 400
-    if _rate_limited(f"login:{_client_ip()}", 20, 600) or _rate_limited(f"login-email:{email}", 8, 600):
+    ip = _client_ip()
+    if (ip and _rate_limited(f"login:{ip}", 20, 600)) or _rate_limited(f"login-email:{email}", 8, 600):
         return jsonify({"error":"Too many attempts. Wait 10 minutes and try again."}), 429
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
@@ -1119,8 +1121,17 @@ def _rate_limited(key, limit, window):
     return False
 
 def _client_ip():
+    """Real visitor IP behind Render's proxy or nginx (Contabo). Returns None if it can't be told
+    apart from the proxy, so IP limits don't lump every visitor together."""
     fwd = request.headers.get("X-Forwarded-For", "")
-    return (fwd.split(",")[0].strip() if fwd else request.remote_addr) or "?"
+    if fwd:
+        # The proxy appends the address it saw last; earlier entries can be faked by the client
+        return fwd.split(",")[-1].strip() or None
+    real = request.headers.get("X-Real-IP", "").strip()
+    if real:
+        return real
+    addr = request.remote_addr or ""
+    return None if addr in ("127.0.0.1", "::1", "") else addr
 
 @app.route("/api/unlock/initiate", methods=["POST"])
 @require_auth
