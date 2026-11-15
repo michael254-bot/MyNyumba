@@ -1,7 +1,13 @@
 import os
+import re
 import json
+import hmac
+import time
+import hashlib
 import uuid
 import base64
+import threading
+import mimetypes
 import requests
 from datetime import datetime, timezone
 from functools import wraps
@@ -11,13 +17,39 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 from supabase import create_client, Client
 
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key")
-CORS(app, supports_credentials=True)
+# The site and API share one origin, so cross-origin access stays off unless
+# ALLOWED_ORIGINS lists other front-ends (comma separated).
+_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if _origins:
+    CORS(app, resources={r"/api/*": {"origins": _origins}})
+
+# Static files carry a ?v= version in index.html, so browsers can cache them for a week
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 7 * 24 * 3600
+# Uploads now go straight to Supabase; this only guards the fallback route
+app.config["MAX_CONTENT_LENGTH"] = 60 * 1024 * 1024
+
+# gzip/brotli for HTML, CSS, JS and JSON (optional: pip install flask-compress)
+try:
+    from flask_compress import Compress
+    Compress(app)
+except ImportError:
+    pass
+
+def _asset_version():
+    """Changes whenever a file in /static changes, so deploys bust the browser cache."""
+    newest = 0
+    for root, _, files in os.walk(os.path.join(app.root_path, "static")):
+        for f in files:
+            newest = max(newest, int(os.path.getmtime(os.path.join(root, f))))
+    return str(newest)
+ASSET_VERSION = _asset_version()
 
 SUPABASE_URL        = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY   = os.getenv("SUPABASE_ANON_KEY")
@@ -42,8 +74,81 @@ def payhero_auth():
     ).decode()
     return {"Authorization": f"Basic {creds}", "Content-Type": "application/json"}
 
+# ── Database connection pool ────────────────────────────────────────────────
+# Opening a new TLS connection to Supabase on every request costs 100–300ms.
+# A small pool reuses connections. conn.close() hands the connection back to
+# the pool instead of closing it, so the route code below doesn't change.
+_pool = None
+_pool_lock = threading.Lock()
+_last_used = {}   # id(connection) -> time it was last handed out
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
+
+def _get_pool():
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                _pool = psycopg2.pool.ThreadedConnectionPool(
+                    1, DB_POOL_MAX, DATABASE_URL,
+                    cursor_factory=psycopg2.extras.RealDictCursor,
+                    keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
+                    connect_timeout=10)
+    return _pool
+
+class _PooledConn:
+    """Wraps a pooled psycopg2 connection; close() returns it to the pool."""
+    def __init__(self, pool, conn):
+        self._pool, self._conn = pool, conn
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+    def close(self):
+        conn, self._conn = self._conn, None
+        if conn is None:
+            return
+        broken = bool(conn.closed)
+        if not broken:
+            try:
+                conn.rollback()   # end any read-only transaction left open
+            except Exception:
+                broken = True
+        if broken:
+            _last_used.pop(id(conn), None)
+        try:
+            self._pool.putconn(conn, close=broken)
+        except Exception:
+            pass
+    def __del__(self):
+        try: self.close()
+        except Exception: pass
+
 def get_db():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set")
+    pool = _get_pool()
+    for attempt in range(2):
+        conn = pool.getconn()
+        idle = time.time() - _last_used.get(id(conn), 0)
+        if not conn.closed and idle > 60:
+            # Connections idle for a while may have been dropped by the pooler; check cheaply
+            try:
+                with conn.cursor() as c: c.execute("SELECT 1")
+                conn.rollback()
+            except Exception:
+                _last_used.pop(id(conn), None)
+                pool.putconn(conn, close=True)
+                continue
+        if conn.closed:
+            pool.putconn(conn, close=True)
+            continue
+        _last_used[id(conn)] = time.time()
+        return _PooledConn(pool, conn)
+    return _PooledConn(pool, pool.getconn())
+
+# ── Auth ────────────────────────────────────────────────────────────────────
+# supabase.auth.get_user() is a network call to Supabase on every request.
+# Cache the answer per token for a minute.
+_user_cache = {}
+_USER_TTL = 60
 
 def get_current_user():
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
@@ -51,11 +156,21 @@ def get_current_user():
         token = session.get("access_token", "")
     if not token:
         return None
+    now = time.time()
+    hit = _user_cache.get(token)
+    if hit and hit[1] > now:
+        return hit[0]
     try:
         user = supabase.auth.get_user(token)
-        return user.user if user else None
+        user = user.user if user else None
     except Exception:
-        return None
+        user = None
+    if user:
+        if len(_user_cache) > 5000:
+            for k in [k for k, v in _user_cache.items() if v[1] <= now]:
+                _user_cache.pop(k, None)
+        _user_cache[token] = (user, now + _USER_TTL)
+    return user
 
 def get_profile(user_id):
     conn = get_db(); cur = conn.cursor()
@@ -95,11 +210,49 @@ def require_admin(f):
         return f(*args, user=user, **kwargs)
     return decorated
 
+# ── Security headers ─────────────────────────────────────────────────────────
+_supabase_origin = (SUPABASE_URL or "").rstrip("/")
+CSP = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",   # the UI uses inline onclick handlers
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    f"img-src 'self' data: blob: {_supabase_origin}",
+    f"media-src 'self' blob: {_supabase_origin}",
+    f"connect-src 'self' {_supabase_origin}",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+])
+
+@app.after_request
+def security_headers(resp):
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.is_secure or request.headers.get("X-Forwarded-Proto") == "https":
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    if resp.mimetype == "text/html":
+        resp.headers.setdefault("Content-Security-Policy", CSP)
+    if request.path.startswith("/api/") and "Cache-Control" not in resp.headers:
+        resp.headers["Cache-Control"] = "no-store"   # don't let shared caches keep personal data
+    return resp
+
+# Fields tenants pay to see, or that are nobody else's business, never go out in public listing data
+PRIVATE_LISTING_FIELDS = ("street_address", "landlord_id", "landlord_profile_id")
+def _public_listing(row):
+    d = dict(row)
+    for k in PRIVATE_LISTING_FIELDS:
+        d.pop(k, None)
+    return d
+
 # ── Page routes ──────────────────────────────────────────────────────────────
 @app.route("/")
 @app.route("/<path:path>")
 def index(path=""):
-    return render_template("index.html")
+    return render_template("index.html", v=ASSET_VERSION)
 
 # ── AUTH ─────────────────────────────────────────────────────────────────────
 @app.route("/api/auth/register", methods=["POST"])
@@ -117,6 +270,11 @@ def register():
         return jsonify({"error":"Email, password and name are required"}), 400
     if role not in ("tenant","landlord"):
         return jsonify({"error":"Invalid role"}), 400
+    if len(password) < 6:
+        return jsonify({"error":"Use at least 6 characters for your password"}), 400
+    ip = _client_ip()
+    if ip and _rate_limited(f"register:{ip}", 10, 3600):
+        return jsonify({"error":"Too many sign-ups from this network. Try again later."}), 429
 
     # Admin email always gets admin role
     if email == ADMIN_EMAIL:
@@ -153,6 +311,9 @@ def login():
     password = data.get("password","")
     if not email or not password:
         return jsonify({"error":"Email and password required"}), 400
+    ip = _client_ip()
+    if (ip and _rate_limited(f"login:{ip}", 20, 600)) or _rate_limited(f"login-email:{email}", 8, 600):
+        return jsonify({"error":"Too many attempts. Wait 10 minutes and try again."}), 429
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         if not res.user or not res.session:
@@ -188,6 +349,8 @@ def login():
 
 @app.route("/api/auth/logout", methods=["POST"])
 def logout():
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    _user_cache.pop(token, None)
     try: supabase.auth.sign_out()
     except: pass
     session.clear()
@@ -236,7 +399,9 @@ def get_counties():
         GROUP BY c.id ORDER BY c.region, c.name
     """)
     rows = cur.fetchall(); conn.close()
-    return jsonify([dict(r) for r in rows]), 200
+    resp = jsonify([dict(r) for r in rows])
+    resp.headers["Cache-Control"] = "public, max-age=300"
+    return resp, 200
 
 @app.route("/api/counties/<slug>")
 def get_county(slug):
@@ -257,7 +422,9 @@ def get_areas():
     else:
         cur.execute("SELECT a.*,c.name as county_name FROM areas a JOIN counties c ON c.id=a.county_id ORDER BY c.name,a.name")
     rows = cur.fetchall(); conn.close()
-    return jsonify([dict(r) for r in rows]), 200
+    resp = jsonify([dict(r) for r in rows])
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp, 200
 
 # ── LISTINGS ──────────────────────────────────────────────────────────────────
 @app.route("/api/listings")
@@ -269,8 +436,11 @@ def get_listings():
     min_price   = request.args.get("min_price","")
     max_price   = request.args.get("max_price","")
     sort        = request.args.get("sort","newest")
-    page        = max(1, int(request.args.get("page",1)))
-    per_page    = min(20, int(request.args.get("per_page",12)))
+    try:
+        page     = max(1, int(request.args.get("page",1)))
+        per_page = max(1, min(20, int(request.args.get("per_page",12))))
+    except ValueError:
+        return jsonify({"error":"Bad page number"}), 400
     amenities   = {
         "has_water":      request.args.get("water"),
         "has_parking":    request.args.get("parking"),
@@ -298,9 +468,9 @@ def get_listings():
         conds.append("l.area_id=%s"); params.append(area_id)
     if prop_type:
         conds.append("l.property_type=%s"); params.append(prop_type)
-    if min_price:
+    if min_price.isdigit():
         conds.append("l.monthly_rent>=%s"); params.append(int(min_price))
-    if max_price:
+    if max_price.isdigit():
         conds.append("l.monthly_rent<=%s"); params.append(int(max_price))
     for col,val in amenities.items():
         if val=="true":
@@ -316,29 +486,37 @@ def get_listings():
     offset = (page-1)*per_page
 
     conn = get_db(); cur = conn.cursor()
+    # One round trip: COUNT(*) OVER() gives the total alongside the page of rows.
+    # Landlord phone is left out on purpose: it's what tenants pay to unlock.
     cur.execute(f"""
         SELECT l.*, c.name AS county_name, c.slug AS county_slug,
                a.name AS area_name,
-               p.full_name AS landlord_name, p.phone AS landlord_phone,
-               (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo
+               (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo,
+               COUNT(*) OVER() AS _total
         FROM listings l
         JOIN counties c ON c.id=l.county_id
         LEFT JOIN areas a ON a.id=l.area_id
-        LEFT JOIN profiles p ON p.id=l.landlord_id
         WHERE {where}
         ORDER BY l.is_featured DESC, {order_by}
         LIMIT %s OFFSET %s
     """, params+[per_page, offset])
-    listings = cur.fetchall()
-    cur.execute(f"""
-        SELECT COUNT(*) FROM listings l
-        JOIN counties c ON c.id=l.county_id
-        LEFT JOIN areas a ON a.id=l.area_id
-        WHERE {where}
-    """, params)
-    total = cur.fetchone()["count"]
+    listings = [_public_listing(l) for l in cur.fetchall()]
+    if listings:
+        total = listings[0]["_total"]
+    elif page > 1:
+        cur.execute(f"""
+            SELECT COUNT(*) FROM listings l
+            JOIN counties c ON c.id=l.county_id
+            LEFT JOIN areas a ON a.id=l.area_id
+            WHERE {where}
+        """, params)
+        total = cur.fetchone()["count"]
+    else:
+        total = 0
+    for l in listings:
+        l.pop("_total", None)
     conn.close()
-    return jsonify({"listings":[dict(l) for l in listings],"total":total,"page":page,"per_page":per_page,"pages":-(-total//per_page)}), 200
+    return jsonify({"listings":listings,"total":total,"page":page,"per_page":per_page,"pages":max(1, -(-total//per_page))}), 200
 
 @app.route("/api/listings/<listing_id>")
 def get_listing(listing_id):
@@ -346,28 +524,40 @@ def get_listing(listing_id):
     cur.execute("""
         SELECT l.*, c.name AS county_name, c.slug AS county_slug,
                a.name AS area_name, a.slug AS area_slug,
-               p.full_name AS landlord_name, p.phone AS landlord_phone,
                p.avatar_url AS landlord_avatar, p.is_verified AS landlord_verified,
                p.id AS landlord_profile_id
         FROM listings l
         JOIN counties c ON c.id=l.county_id
         LEFT JOIN areas a ON a.id=l.area_id
         LEFT JOIN profiles p ON p.id=l.landlord_id
-        WHERE l.id=%s AND l.status='active'
+        WHERE l.id=%s
     """, (listing_id,))
     listing = cur.fetchone()
+    if listing and listing["status"] != "active":
+        # Hidden or in-review listings are visible only to their landlord and the admin (preview)
+        viewer = get_current_user()
+        allowed = viewer and (viewer.email == ADMIN_EMAIL or str(viewer.id) == str(listing["landlord_id"]))
+        if viewer and not allowed and listing["status"] in ("let", "archived", "inactive"):
+            # A tenant who already paid keeps access, so they can see it's been let
+            cur.execute("SELECT 1 FROM unlocks WHERE tenant_id=%s AND listing_id=%s AND status='completed'", (str(viewer.id), listing_id))
+            allowed = cur.fetchone() is not None
+        if not allowed:
+            listing = None
     if not listing: conn.close(); return jsonify({"error":"Not found"}), 404
     cur.execute("SELECT * FROM listing_media WHERE listing_id=%s ORDER BY sort_order", (listing_id,))
     media = cur.fetchall()
     cur.execute("""
-        SELECT r.*, p.full_name AS reviewer_name
+        SELECT r.*, split_part(COALESCE(p.full_name,'Tenant'), ' ', 1) AS reviewer_name
         FROM reviews r JOIN profiles p ON p.id=r.tenant_id
         WHERE r.listing_id=%s ORDER BY r.created_at DESC LIMIT 10
     """, (listing_id,))
     reviews = cur.fetchall()
-    cur.execute("UPDATE listings SET views=views+1 WHERE id=%s", (listing_id,))
+    if listing["status"] == "active":
+        cur.execute("UPDATE listings SET views=views+1 WHERE id=%s", (listing_id,))
     conn.commit(); conn.close()
-    return jsonify({"listing":dict(listing),"media":[dict(m) for m in media],"reviews":[dict(r) for r in reviews]}), 200
+    media = [{k: m[k] for k in ("id", "media_type", "url", "sort_order") if k in m} for m in media]
+    reviews = [{k: r[k] for k in ("id", "rating", "comment", "created_at", "reviewer_name") if k in r} for r in reviews]
+    return jsonify({"listing":_public_listing(listing),"media":media,"reviews":reviews}), 200
 
 @app.route("/api/listings", methods=["POST"])
 @require_landlord
@@ -384,13 +574,30 @@ def create_listing(user):
            "near_matatu","near_church","near_water_kiosk"]
 
     conn = get_db(); cur = conn.cursor()
+
+    # A landlord can type an area that isn't in the list yet; reuse it if it exists in that county
+    area_id = data.get("area_id") or None
+    new_area = re.sub(r"\s+", " ", str(data.get("area_name") or "")).strip()
+    if not area_id and new_area:
+        if len(new_area) > 60 or not re.fullmatch(r"[A-Za-z0-9 '.\-/()]+", new_area):
+            conn.close(); return jsonify({"error":"Use letters and numbers only for the area name (60 characters max)."}), 400
+        new_area = new_area if any(ch.isupper() for ch in new_area) else new_area.title()
+        cur.execute("SELECT id FROM areas WHERE county_id=%s AND lower(name)=lower(%s) LIMIT 1", (data.get("county_id"), new_area))
+        row = cur.fetchone()
+        if row:
+            area_id = row["id"]
+        else:
+            area_slug = re.sub(r"[^a-z0-9]+", "-", new_area.lower().replace("'", "")).strip("-")
+            cur.execute("INSERT INTO areas (county_id,name,slug) VALUES (%s,%s,%s) RETURNING id", (data.get("county_id"), new_area, area_slug))
+            area_id = cur.fetchone()["id"]
+
     cur.execute(f"""
         INSERT INTO listings (id,landlord_id,county_id,area_id,title,description,
           property_type,floor,monthly_rent,deposit_months,street_address,
           {','.join(af)},status)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,{','.join(['%s']*len(af))},'active')
         RETURNING id
-    """, (lid, str(user.id), data.get("county_id"), data.get("area_id"),
+    """, (lid, str(user.id), data.get("county_id"), area_id,
           data["title"], data.get("description"), data["property_type"],
           data.get("floor"), int(data["monthly_rent"]), int(data.get("deposit_months",2)),
           data.get("street_address"), *[bool(data.get(f,False)) for f in af]))
@@ -403,7 +610,7 @@ def update_listing(user, listing_id):
     data = request.json
     p    = get_profile(user.id)
     if not p: return jsonify({"error":"Profile not found"}), 403
-    is_admin = (user.email == ADMIN_EMAIL or p["role"] == "admin")
+    is_admin = (user.email == ADMIN_EMAIL)   # only the configured admin email, never a role someone could set
 
     conn = get_db(); cur = conn.cursor()
     if is_admin:
@@ -422,9 +629,26 @@ def update_listing(user, listing_id):
                  "has_lift","near_school","near_hospital","near_market","near_matatu",
                  "near_church","near_water_kiosk"]
     updates = {k: data[k] for k in updatable if k in data}
+    allowed_status = ("active","inactive","pending","let","archived") if is_admin else ("active","inactive","let")
+    if "status" in updates and updates["status"] not in allowed_status:
+        conn.close(); return jsonify({"error":"Invalid status"}), 400
+    try:
+        for k in ("monthly_rent","deposit_months"):
+            if k in updates: updates[k] = int(updates[k])
+    except (TypeError, ValueError):
+        conn.close(); return jsonify({"error":"Rent and deposit must be numbers"}), 400
     if not updates: conn.close(); return jsonify({"error":"Nothing to update"}), 400
     set_clause = ", ".join(f"{k}=%s" for k in updates)
-    cur.execute(f"UPDATE listings SET {set_clause} WHERE id=%s", list(updates.values())+[listing_id])
+    extra = ""
+    new_status = updates.get("status")
+    if new_status == "let":
+        extra = ", let_at=NOW(), auto_hidden_reason=NULL"
+    elif new_status == "active":
+        # Going live (or relisting) counts as confirming the house is available
+        extra = ", let_at=NULL, auto_hidden_reason=NULL, last_confirmed_at=NOW()"
+    cur.execute(f"UPDATE listings SET {set_clause}{extra} WHERE id=%s", list(updates.values())+[listing_id])
+    if new_status in ("active", "let"):
+        cur.execute("UPDATE listing_reports SET resolved_at=NOW() WHERE listing_id=%s AND resolved_at IS NULL", (listing_id,))
     conn.commit(); conn.close()
     return jsonify({"message":"Updated"}), 200
 
@@ -432,7 +656,7 @@ def update_listing(user, listing_id):
 @require_auth
 def delete_listing(user, listing_id):
     p        = get_profile(user.id)
-    is_admin = (user.email == ADMIN_EMAIL or (p and p["role"] == "admin"))
+    is_admin = (user.email == ADMIN_EMAIL)
     conn = get_db(); cur = conn.cursor()
     if is_admin:
         cur.execute("DELETE FROM listings WHERE id=%s RETURNING id", (listing_id,))
@@ -451,7 +675,10 @@ def landlord_listings(user):
     cur.execute("""
         SELECT l.*, c.name AS county_name, a.name AS area_name,
                (SELECT COUNT(*) FROM listing_media WHERE listing_id=l.id AND media_type='photo') AS photo_count,
-               (SELECT COUNT(*) FROM listing_media WHERE listing_id=l.id AND media_type='video') AS video_count
+               (SELECT COUNT(*) FROM listing_media WHERE listing_id=l.id AND media_type='video') AS video_count,
+               (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo,
+               (SELECT COUNT(*) FROM listing_reports r WHERE r.listing_id=l.id AND r.resolved_at IS NULL) AS open_reports,
+               EXTRACT(DAY FROM NOW() - COALESCE(l.last_confirmed_at, l.created_at))::int AS days_since_confirmed
         FROM listings l
         JOIN counties c ON c.id=l.county_id
         LEFT JOIN areas a ON a.id=l.area_id
@@ -476,14 +703,17 @@ def admin_listings(user):
     cur.execute("""
         SELECT l.*, c.name AS county_name, a.name AS area_name,
                p.full_name AS landlord_name, p.phone AS landlord_phone,
-               p.email AS landlord_email, p.id_number AS landlord_id_number,
+               au.email AS landlord_email, p.id_number AS landlord_id_number,
                p.location AS landlord_location,
-               (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo
+               (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo,
+               (SELECT COUNT(*) FROM listing_reports r WHERE r.listing_id=l.id AND r.resolved_at IS NULL) AS open_reports,
+               (SELECT string_agg(DISTINCT r.reason, ',') FROM listing_reports r WHERE r.listing_id=l.id AND r.resolved_at IS NULL) AS report_reasons
         FROM listings l
         JOIN counties c ON c.id=l.county_id
         LEFT JOIN areas a ON a.id=l.area_id
         LEFT JOIN profiles p ON p.id=l.landlord_id
-        ORDER BY l.created_at DESC
+        LEFT JOIN auth.users au ON au.id=l.landlord_id
+        ORDER BY (SELECT COUNT(*) FROM listing_reports r WHERE r.listing_id=l.id AND r.resolved_at IS NULL) DESC, l.created_at DESC
     """)
     listings = cur.fetchall(); conn.close()
     return jsonify([dict(l) for l in listings]), 200
@@ -569,76 +799,365 @@ def admin_stats(user):
           (SELECT COUNT(*) FROM listings) AS total_listings,
           (SELECT COUNT(*) FROM profiles WHERE role='landlord') AS landlords,
           (SELECT COUNT(*) FROM profiles WHERE role='tenant') AS tenants,
-          (SELECT COUNT(*) FROM unlocks WHERE status='completed') AS total_unlocks
+          (SELECT COUNT(*) FROM unlocks WHERE status='completed') AS total_unlocks,
+          (SELECT COUNT(DISTINCT listing_id) FROM listing_reports WHERE resolved_at IS NULL) AS reported_listings
     """)
     stats = cur.fetchone(); conn.close()
     return jsonify(dict(stats) if stats else {}), 200
 
 # ── MEDIA ────────────────────────────────────────────────────────────────────
+MEDIA_BUCKET = "listing-media"
+PHOTO_EXTS = {"jpg", "jpeg", "png", "webp", "heic", "heif", "gif"}
+VIDEO_EXTS = {"mp4", "mov", "m4v", "webm", "3gp"}
+
+def _can_edit_listing(cur, user, listing_id):
+    """Owner, or the admin, may change a listing's media."""
+    if user.email == ADMIN_EMAIL:
+        cur.execute("SELECT id FROM listings WHERE id=%s", (listing_id,))
+    else:
+        cur.execute("SELECT id FROM listings WHERE id=%s AND landlord_id=%s", (listing_id, str(user.id)))
+    return cur.fetchone() is not None
+
+def _media_mime(ext, media_type):
+    guessed = mimetypes.types_map.get("." + ext)
+    if guessed:
+        return guessed
+    return {"jpg": "image/jpeg", "heic": "image/heic", "heif": "image/heif", "webp": "image/webp",
+            "mov": "video/quicktime", "m4v": "video/mp4", "3gp": "video/3gpp"}.get(
+        ext, "image/jpeg" if media_type == "photo" else "video/mp4")
+
+def _public_url(path):
+    return f"{SUPABASE_URL}/storage/v1/object/public/{MEDIA_BUCKET}/{path}"
+
+def _insert_media(cur, listing_id, media_type, url, path, sort_order):
+    if sort_order is None:
+        cur.execute("""
+            INSERT INTO listing_media (listing_id,media_type,url,storage_path,sort_order)
+            VALUES (%s,%s,%s,%s,(SELECT COALESCE(MAX(sort_order)+1,0) FROM listing_media WHERE listing_id=%s))
+            RETURNING id,url
+        """, (listing_id, media_type, url, path, listing_id))
+    else:
+        cur.execute("""
+            INSERT INTO listing_media (listing_id,media_type,url,storage_path,sort_order)
+            VALUES (%s,%s,%s,%s,%s) RETURNING id,url
+        """, (listing_id, media_type, url, path, int(sort_order)))
+    return cur.fetchone()
+
+@app.route("/api/listings/<listing_id>/media/sign", methods=["POST"])
+@require_landlord
+def sign_media_upload(user, listing_id):
+    """Step 1 of a direct upload: hand the browser a short-lived signed URL so the
+    file goes straight to Supabase Storage instead of through this server."""
+    data = request.json or {}
+    media_type = "video" if data.get("media_type") == "video" else "photo"
+    ext = str(data.get("ext", "")).lower().strip(".")[:5]
+    allowed = VIDEO_EXTS if media_type == "video" else PHOTO_EXTS
+    if ext not in allowed:
+        return jsonify({"error": f"That file type isn't supported. Use {', '.join(sorted(allowed))}."}), 400
+    conn = get_db(); cur = conn.cursor()
+    ok = _can_edit_listing(cur, user, listing_id); conn.close()
+    if not ok:
+        return jsonify({"error": "Not found"}), 404
+    path = f"{listing_id}/{uuid.uuid4()}.{ext}"
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/storage/v1/object/upload/sign/{MEDIA_BUCKET}/{path}",
+            headers={"Authorization": f"Bearer {SUPABASE_SERVICE_KEY}", "apikey": SUPABASE_SERVICE_KEY,
+                     "Content-Type": "application/json"},
+            json={}, timeout=10)
+        body = r.json() if r.content else {}
+        signed = body.get("url")
+        if r.status_code >= 300 or not signed:
+            return jsonify({"error": body.get("message") or "Storage refused the upload"}), 502
+    except Exception as e:
+        return jsonify({"error": f"Storage unavailable: {e}"}), 502
+    return jsonify({
+        "path": path,
+        "upload_url": f"{SUPABASE_URL}/storage/v1{signed}",
+        "public_url": _public_url(path),
+    }), 200
+
+@app.route("/api/listings/<listing_id>/media/confirm", methods=["POST"])
+@require_landlord
+def confirm_media_upload(user, listing_id):
+    """Step 2 of a direct upload: record the file once the browser has uploaded it."""
+    data = request.json or {}
+    path = str(data.get("path", ""))
+    media_type = "video" if data.get("media_type") == "video" else "photo"
+    if not path.startswith(f"{listing_id}/") or ".." in path:
+        return jsonify({"error": "Invalid file path"}), 400
+    conn = get_db(); cur = conn.cursor()
+    if not _can_edit_listing(cur, user, listing_id):
+        conn.close(); return jsonify({"error": "Not found"}), 404
+    media = _insert_media(cur, listing_id, media_type, _public_url(path), path, data.get("sort_order"))
+    conn.commit(); conn.close()
+    return jsonify({"id": str(media["id"]), "url": media["url"]}), 201
+
 @app.route("/api/listings/<listing_id>/media", methods=["POST"])
 @require_landlord
 def upload_media(user, listing_id):
+    """Fallback upload through this server (used if direct upload isn't available)."""
     conn = get_db(); cur = conn.cursor()
-    cur.execute("SELECT id FROM listings WHERE id=%s AND landlord_id=%s", (listing_id, str(user.id)))
-    if not cur.fetchone(): conn.close(); return jsonify({"error":"Not found"}), 404
+    if not _can_edit_listing(cur, user, listing_id): conn.close(); return jsonify({"error":"Not found"}), 404
     if "file" not in request.files: conn.close(); return jsonify({"error":"No file"}), 400
 
     file       = request.files["file"]
-    media_type = request.form.get("media_type","photo")
-    ext        = file.filename.rsplit(".",1)[-1].lower()
+    media_type = "video" if request.form.get("media_type") == "video" else "photo"
+    ext        = (file.filename.rsplit(".",1)[-1].lower() if "." in (file.filename or "") else "")[:5] or ("mp4" if media_type == "video" else "jpg")
     filename   = f"{listing_id}/{uuid.uuid4()}.{ext}"
     file_bytes = file.read()
-    mime       = f"image/{ext}" if media_type=="photo" else f"video/{ext}"
+    mime       = file.mimetype if file.mimetype and file.mimetype != "application/octet-stream" else _media_mime(ext, media_type)
 
     try:
-        supabase_admin.storage.from_("listing-media").upload(filename, file_bytes, {"content-type": mime})
-        public_url = supabase_admin.storage.from_("listing-media").get_public_url(filename)
+        supabase_admin.storage.from_(MEDIA_BUCKET).upload(filename, file_bytes, {"content-type": mime})
     except Exception as e:
-        conn.close(); return jsonify({"error":str(e)}), 500
+        print("UPLOAD ERROR:", e)
+        conn.close(); return jsonify({"error":"Storage didn't accept the file. Try again."}), 500
 
-    cur.execute("""
-        INSERT INTO listing_media (listing_id,media_type,url,storage_path,sort_order)
-        VALUES (%s,%s,%s,%s,(SELECT COALESCE(MAX(sort_order)+1,0) FROM listing_media WHERE listing_id=%s))
-        RETURNING id,url
-    """, (listing_id, media_type, public_url, filename, listing_id))
-    media = cur.fetchone(); conn.commit(); conn.close()
+    media = _insert_media(cur, listing_id, media_type, _public_url(filename), filename, request.form.get("sort_order"))
+    conn.commit(); conn.close()
     return jsonify({"id":str(media["id"]),"url":media["url"]}), 201
+
+@app.route("/api/landlord/listings/<listing_id>")
+@require_landlord
+def landlord_listing_detail(user, listing_id):
+    """A landlord's own listing with its media, whatever its status (for the edit page)."""
+    conn = get_db(); cur = conn.cursor()
+    if not _can_edit_listing(cur, user, listing_id):
+        conn.close(); return jsonify({"error": "Not found"}), 404
+    cur.execute("""
+        SELECT l.*, c.name AS county_name, c.slug AS county_slug, a.name AS area_name
+        FROM listings l JOIN counties c ON c.id=l.county_id LEFT JOIN areas a ON a.id=l.area_id
+        WHERE l.id=%s
+    """, (listing_id,))
+    listing = cur.fetchone()
+    cur.execute("SELECT * FROM listing_media WHERE listing_id=%s ORDER BY sort_order", (listing_id,))
+    media = cur.fetchall(); conn.close()
+    return jsonify({"listing": dict(listing), "media": [dict(m) for m in media]}), 200
 
 @app.route("/api/listings/<listing_id>/media/<media_id>", methods=["DELETE"])
 @require_landlord
 def delete_media(user, listing_id, media_id):
     conn = get_db(); cur = conn.cursor()
+    if not _can_edit_listing(cur, user, listing_id):
+        conn.close(); return jsonify({"error": "Not found"}), 404
     cur.execute("""
-        DELETE FROM listing_media WHERE id=%s
-        AND listing_id IN (SELECT id FROM listings WHERE id=%s AND landlord_id=%s)
+        DELETE FROM listing_media WHERE id=%s AND listing_id=%s
         RETURNING storage_path
-    """, (media_id, listing_id, str(user.id)))
+    """, (media_id, listing_id))
     deleted = cur.fetchone(); conn.commit(); conn.close()
     if deleted and deleted["storage_path"]:
-        try: supabase_admin.storage.from_("listing-media").remove([deleted["storage_path"]])
+        try: supabase_admin.storage.from_(MEDIA_BUCKET).remove([deleted["storage_path"]])
         except: pass
     return jsonify({"message":"Deleted"}), 200
 
+# ── HOUSE TAKEN: confirmations, tenant reports, automatic clean-up ───────────
+CONFIRM_EVERY_DAYS = 30   # dashboard asks "Still available?" after this
+CONFIRM_GRACE_DAYS = 7    # ...and hides the listing if nobody answers within this
+ARCHIVE_LET_DAYS   = 90   # let listings move to the archive after this
+REPORTS_TO_HIDE    = 2    # tenant reports that hide a listing until the landlord confirms
+
+@app.route("/api/listings/<listing_id>/confirm", methods=["POST"])
+@require_landlord
+def confirm_available(user, listing_id):
+    """Landlord says: yes, still available. Resets the 30-day clock (and brings back an auto-hidden listing)."""
+    conn = get_db(); cur = conn.cursor()
+    if not _can_edit_listing(cur, user, listing_id):
+        conn.close(); return jsonify({"error": "Not found"}), 404
+    cur.execute("""
+        UPDATE listings SET last_confirmed_at=NOW(),
+               status = CASE WHEN status='inactive' AND auto_hidden_reason IS NOT NULL THEN 'active' ELSE status END,
+               auto_hidden_reason = NULL
+        WHERE id=%s RETURNING status
+    """, (listing_id,))
+    row = cur.fetchone()
+    cur.execute("UPDATE listing_reports SET resolved_at=NOW() WHERE listing_id=%s AND resolved_at IS NULL", (listing_id,))
+    conn.commit(); conn.close()
+    return jsonify({"message": "Confirmed", "status": row["status"]}), 200
+
+@app.route("/api/listings/<listing_id>/report", methods=["POST"])
+@require_auth
+def report_listing(user, listing_id):
+    """A tenant who paid for this house reports it as taken or the number as wrong."""
+    data   = request.json or {}
+    reason = data.get("reason")
+    note   = str(data.get("note") or "").strip()[:500]
+    if reason not in ("taken", "wrong_number", "other"):
+        return jsonify({"error": "Pick a reason"}), 400
+    if _rate_limited(f"report:{user.id}", 10, 3600):
+        return jsonify({"error": "Too many reports. Try again later."}), 429
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT 1 FROM unlocks WHERE tenant_id=%s AND listing_id=%s AND status='completed'", (str(user.id), listing_id))
+    if not cur.fetchone():
+        conn.close(); return jsonify({"error": "Only tenants who unlocked this house can report it."}), 403
+    cur.execute("""
+        INSERT INTO listing_reports (listing_id, tenant_id, reason, note) VALUES (%s,%s,%s,%s)
+        ON CONFLICT (listing_id, tenant_id) DO UPDATE SET reason=EXCLUDED.reason, note=EXCLUDED.note, created_at=NOW(), resolved_at=NULL
+    """, (listing_id, str(user.id), reason, note))
+    cur.execute("""
+        SELECT COUNT(*) AS n FROM listing_reports
+        WHERE listing_id=%s AND resolved_at IS NULL AND reason IN ('taken','wrong_number')
+    """, (listing_id,))
+    hidden = False
+    if cur.fetchone()["n"] >= REPORTS_TO_HIDE:
+        cur.execute("""
+            UPDATE listings SET status='inactive', auto_hidden_reason='reported'
+            WHERE id=%s AND status='active' RETURNING id
+        """, (listing_id,))
+        hidden = cur.fetchone() is not None
+    conn.commit(); conn.close()
+    return jsonify({"message": "Report received", "listing_hidden": hidden}), 201
+
+_last_maintenance = 0
+_maintenance_lock = threading.Lock()
+
+def run_listing_maintenance(force=False):
+    """Hide listings nobody has confirmed in 37 days and archive listings let 90+ days ago.
+    Runs inside normal requests at most every 15 minutes, so no cron job is needed."""
+    global _last_maintenance
+    now = time.time()
+    if not force and now - _last_maintenance < 900:
+        return None
+    if not _maintenance_lock.acquire(blocking=False):
+        return None
+    try:
+        _last_maintenance = now
+        conn = get_db(); cur = conn.cursor()
+        cur.execute(f"""
+            UPDATE listings SET status='inactive', auto_hidden_reason='not_confirmed'
+            WHERE status='active'
+              AND COALESCE(last_confirmed_at, created_at) < NOW() - INTERVAL '{CONFIRM_EVERY_DAYS + CONFIRM_GRACE_DAYS} days'
+            RETURNING id
+        """)
+        hidden = len(cur.fetchall())
+        cur.execute(f"""
+            UPDATE listings SET status='archived'
+            WHERE status='let' AND let_at < NOW() - INTERVAL '{ARCHIVE_LET_DAYS} days'
+            RETURNING id
+        """)
+        archived = len(cur.fetchall())
+        conn.commit(); conn.close()
+        if hidden or archived:
+            print(f"MAINTENANCE: hid {hidden} unconfirmed, archived {archived} let listings")
+        return {"hidden": hidden, "archived": archived}
+    except Exception as e:
+        print("MAINTENANCE ERROR:", e)
+        return None
+    finally:
+        _maintenance_lock.release()
+
+@app.before_request
+def _maybe_maintain():
+    if request.path.startswith("/api/listings") and request.method == "GET":
+        run_listing_maintenance()
+
 # ── UNLOCKS ───────────────────────────────────────────────────────────────────
+# Payment flow (PayHero STK push):
+#   1. initiate_unlock creates a 'pending' row and asks PayHero to push a prompt.
+#      The callback URL carries u=<unlock id>&t=<signature>, so a callback can be
+#      tied to its row and nobody can forge one without knowing the signature.
+#   2. mpesa_callback never trusts the request body on its own. A payment only
+#      counts if the signature in the URL is valid, or PayHero's own
+#      transaction-status API confirms it.
+#   3. unlock_status (polled by the browser) also asks PayHero directly while a
+#      payment is pending, so a lost callback doesn't leave a paying tenant stuck.
+PAYHERO_STATUS_URL = "https://backend.payhero.co.ke/api/v2/transaction-status"
+PAYHERO_VERIFY     = os.getenv("PAYHERO_VERIFY", "true").lower() != "false"
+UNLOCK_PRICE       = 500
+_CALLBACK_SECRET   = (os.getenv("PAYHERO_CALLBACK_SECRET") or SUPABASE_SERVICE_KEY or app.secret_key or "").encode()
+
+def _callback_sig(unlock_id):
+    return hmac.new(_CALLBACK_SECRET, f"unlock:{unlock_id}".encode(), hashlib.sha256).hexdigest()[:32]
+
+def _callback_url_for(unlock_id):
+    sep = "&" if "?" in PAYHERO_CALLBACK else "?"
+    return f"{PAYHERO_CALLBACK}{sep}u={unlock_id}&t={_callback_sig(unlock_id)}"
+
+def _payhero_status(reference):
+    """Ask PayHero what happened to a payment. Returns 'success', 'failed', 'pending' or None (couldn't tell)."""
+    if not reference or PAYHERO_USERNAME == "placeholder":
+        return None
+    try:
+        r = requests.get(PAYHERO_STATUS_URL, params={"reference": reference}, headers=payhero_auth(), timeout=8)
+        data = r.json() if r.content else {}
+    except Exception as e:
+        print("PAYHERO STATUS CHECK FAILED:", e)
+        return None
+    status = str(data.get("status", "")).upper()
+    if status == "SUCCESS":
+        return "success"
+    if status in ("FAILED", "CANCELLED", "CANCELED", "REVERSED"):
+        return "failed"
+    if status in ("QUEUED", "PENDING", "PROCESSING"):
+        return "pending"
+    return None
+
+def _complete_unlock(cur, unlock_id, receipt):
+    cur.execute("""
+        UPDATE unlocks SET status='completed', mpesa_receipt_number=%s, completed_at=NOW()
+        WHERE id=%s AND status <> 'completed'
+        RETURNING listing_id
+    """, (receipt or None, unlock_id))
+    row = cur.fetchone()
+    if row:
+        cur.execute("UPDATE listings SET unlock_count=COALESCE(unlock_count,0)+1 WHERE id=%s", (row["listing_id"],))
+    return bool(row)
+
+# Simple per-process rate limiter (stops STK-push spam and password guessing)
+_rate = {}
+_rate_lock = threading.Lock()
+def _rate_limited(key, limit, window):
+    now = time.time()
+    with _rate_lock:
+        hits = [t for t in _rate.get(key, []) if t > now - window]
+        if len(hits) >= limit:
+            _rate[key] = hits
+            return True
+        hits.append(now)
+        _rate[key] = hits
+        if len(_rate) > 20000:
+            for k in [k for k, v in _rate.items() if not v or v[-1] < now - 3600]:
+                _rate.pop(k, None)
+    return False
+
+def _client_ip():
+    """Real visitor IP behind Render's proxy or nginx (Contabo). Returns None if it can't be told
+    apart from the proxy, so IP limits don't lump every visitor together."""
+    fwd = request.headers.get("X-Forwarded-For", "")
+    if fwd:
+        # The proxy appends the address it saw last; earlier entries can be faked by the client
+        return fwd.split(",")[-1].strip() or None
+    real = request.headers.get("X-Real-IP", "").strip()
+    if real:
+        return real
+    addr = request.remote_addr or ""
+    return None if addr in ("127.0.0.1", "::1", "") else addr
 
 @app.route("/api/unlock/initiate", methods=["POST"])
 @require_auth
 def initiate_unlock(user):
-    data       = request.json
+    data       = request.json or {}
     listing_id = data.get("listing_id")
-    phone      = data.get("phone","").replace(" ","").replace("+","")
+    phone      = str(data.get("phone","")).replace(" ","").replace("+","").replace("-","")
     if not listing_id or not phone:
         return jsonify({"error":"listing_id and phone required"}), 400
     if phone.startswith("0"): phone = "254"+phone[1:]
     if not phone.startswith("254"): phone = "254"+phone
+    if not re.fullmatch(r"254[17]\d{8}", phone):
+        return jsonify({"error":"Enter a Safaricom number like 0712 345 678."}), 400
+    if _rate_limited(f"stk:{user.id}", 5, 600) or _rate_limited(f"stk-phone:{phone}", 5, 600):
+        return jsonify({"error":"Too many payment requests. Wait a few minutes and try again."}), 429
 
     conn = get_db(); cur = conn.cursor()
     cur.execute("SELECT id,status FROM unlocks WHERE tenant_id=%s AND listing_id=%s", (str(user.id), listing_id))
     existing = cur.fetchone()
     if existing and existing["status"]=="completed":
         conn.close(); return jsonify({"error":"Already unlocked","already_unlocked":True}), 409
-    cur.execute("SELECT id FROM listings WHERE id=%s AND status='active'", (listing_id,))
-    if not cur.fetchone(): conn.close(); return jsonify({"error":"Listing not found"}), 404
+    cur.execute("SELECT id, landlord_id FROM listings WHERE id=%s AND status='active'", (listing_id,))
+    listing = cur.fetchone()
+    if not listing: conn.close(); return jsonify({"error":"Listing not found"}), 404
+    if str(listing["landlord_id"]) == str(user.id):
+        conn.close(); return jsonify({"error":"This is your own listing."}), 400
 
     uid = str(uuid.uuid4())
     cur.execute("""
@@ -648,250 +1167,146 @@ def initiate_unlock(user):
         RETURNING id
     """, (uid, str(user.id), listing_id, phone, phone))
     unlock = cur.fetchone(); conn.commit()
+    unlock_id = str(unlock["id"])
 
     # ── PayHero STK Push ──────────────────────────────────────────────────────
     try:
         resp = requests.post(
             PAYHERO_STK_URL,
             json={
-                "amount":             500,
+                "amount":             UNLOCK_PRICE,
                 "phone_number":       phone,
                 "channel_id":         PAYHERO_CHANNEL_ID,
                 "provider":           "m-pesa",
-                "external_reference": f"MyNyumba-{str(unlock['id'])[:8]}",
-                "callback_url":       PAYHERO_CALLBACK,
+                "external_reference": f"MyNyumba-{unlock_id[:8]}",
+                "callback_url":       _callback_url_for(unlock_id),
             },
             headers=payhero_auth(),
             timeout=15
         )
-        data        = resp.json()
+        data        = resp.json() if resp.content else {}
         checkout_id = data.get("reference") or data.get("CheckoutRequestID", "")
-        if checkout_id:
-            cur.execute(
-                "UPDATE unlocks SET mpesa_checkout_request_id=%s WHERE id=%s",
-                (checkout_id, str(unlock["id"]))
-            )
-            conn.commit()
-        conn.close()
-        return jsonify({
-            "message":             "STK Push sent. Enter your M-Pesa PIN.",
-            "checkout_request_id": checkout_id,
-            "unlock_id":           str(unlock["id"])
-        }), 200
+        if resp.status_code >= 300 or not checkout_id:
+            print("PAYHERO INITIATE REFUSED:", resp.status_code, data)
+            conn.close()
+            return jsonify({"error": "M-Pesa didn't accept the request. Check the number and try again."}), 502
+        cur.execute("UPDATE unlocks SET mpesa_checkout_request_id=%s WHERE id=%s", (checkout_id, unlock_id))
+        conn.commit(); conn.close()
+        return jsonify({"message": "STK Push sent. Enter your M-Pesa PIN."}), 200
     except Exception as e:
+        print("PAYHERO INITIATE ERROR:", e)
         conn.close()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "We couldn't reach M-Pesa. Try again in a minute."}), 502
 
 @app.route("/api/mpesa/callback", methods=["POST"])
 def mpesa_callback():
     conn = None
-
     try:
-        data = request.get_json(silent=True) or {}
-
-        print("========== PAYHERO CALLBACK ==========")
-        print("CALLBACK DATA:", data)
-
+        data     = request.get_json(silent=True) or {}
         response = data.get("response") or {}
-
-        # PayHero callback fields
         merchant_request_id = response.get("MerchantRequestID", "")
         checkout_request_id = response.get("CheckoutRequestID", "")
-        external_reference = response.get("ExternalReference", "")
-        receipt = response.get("MpesaReceiptNumber", "")
-        payment_status = response.get("Status", "")
-        result_code = response.get("ResultCode")
-
-        # C2B callback fallback fields
-        user_reference = response.get("User_Reference", "")
-        c2b_receipt = (
-            response.get("MPESA_Reference", "")
-            or response.get("Transaction_Reference", "")
-        )
-
-        if not external_reference:
-            external_reference = user_reference
-
-        if not receipt:
-            receipt = c2b_receipt
-
-        print("MERCHANT REQUEST ID:", merchant_request_id)
-        print("CHECKOUT REQUEST ID:", checkout_request_id)
-        print("EXTERNAL REFERENCE:", external_reference)
-        print("RECEIPT:", receipt)
-        print("PAYMENT STATUS:", payment_status)
-        print("RESULT CODE:", result_code)
-
-        # Determine whether payment succeeded
-        success = (
-            str(payment_status).lower() == "success"
-            or result_code == 0
+        receipt = (response.get("MpesaReceiptNumber", "") or response.get("MPESA_Reference", "")
+                   or response.get("Transaction_Reference", ""))
+        claims_success = (
+            str(response.get("Status", "")).lower() == "success"
+            or response.get("ResultCode") == 0
             or response.get("woocommerce_payment_status") == "complete"
         )
+        print("PAYHERO CALLBACK:", {"merchant": merchant_request_id, "checkout": checkout_request_id,
+                                    "status": response.get("Status"), "result": response.get("ResultCode"),
+                                    "has_u": bool(request.args.get("u"))})
 
-        # ------------------------------------------------
-        # The unlock table stores MerchantRequestID
-        # ------------------------------------------------
-        unlock_ref = merchant_request_id
+        conn = get_db(); cur = conn.cursor()
 
-        if not unlock_ref:
-            print("WARNING: No MerchantRequestID received")
-
-            # Fallback for C2B callback
-            if external_reference:
-                print("Trying ExternalReference:", external_reference)
-
-                conn = get_db()
-                cur = conn.cursor()
-
-                cur.execute("""
-                    SELECT id, listing_id, status
-                    FROM unlocks
-                    WHERE id::text = %s
-                    LIMIT 1
-                """, (external_reference,))
-
+        # Find the unlock: by the id in our signed callback URL, else by PayHero's reference
+        url_uid, url_sig = request.args.get("u", ""), request.args.get("t", "")
+        signed_ok = bool(url_uid) and hmac.compare_digest(url_sig, _callback_sig(url_uid))
+        unlock = None
+        if url_uid:
+            try:
+                cur.execute("SELECT id, status, mpesa_checkout_request_id FROM unlocks WHERE id=%s", (url_uid,))
                 unlock = cur.fetchone()
+            except Exception:
+                conn.rollback(); unlock = None
+        if not unlock:
+            refs = [r for r in (merchant_request_id, checkout_request_id) if r]
+            if refs:
+                cur.execute("SELECT id, status, mpesa_checkout_request_id FROM unlocks WHERE mpesa_checkout_request_id = ANY(%s) LIMIT 1", (refs,))
+                unlock = cur.fetchone()
+        if not unlock:
+            print("CALLBACK: no matching unlock")
+            return jsonify({"status": "ok"}), 200
+        if unlock["status"] == "completed":
+            return jsonify({"status": "ok"}), 200
 
-                if not unlock:
-                    print("No unlock found using fallback reference")
-
-                    conn.close()
-
-                    return jsonify({
-                        "status": "ok"
-                    }), 200
-
-            else:
-                return jsonify({
-                    "status": "error",
-                    "error": "No payment reference received"
-                }), 400
-
-        # ------------------------------------------------
-        # Connect to database
-        # ------------------------------------------------
-        if conn is None:
-            conn = get_db()
-
-        cur = conn.cursor()
-
-        # ------------------------------------------------
-        # Successful payment
-        # ------------------------------------------------
-        if success:
-
-            cur.execute("""
-                UPDATE unlocks
-                SET
-                    status = 'completed',
-                    mpesa_receipt_number = %s,
-                    completed_at = NOW()
-                WHERE mpesa_checkout_request_id = %s
-                  AND status <> 'completed'
-                RETURNING id, listing_id
-            """, (receipt, unlock_ref))
-
-            unlock = cur.fetchone()
-
-            print("UPDATED UNLOCK:", unlock)
-
-            if unlock:
-
-                try:
-                    listing_id = unlock["listing_id"]
-                except (TypeError, KeyError):
-                    listing_id = unlock[1]
-
-                cur.execute("""
-                    UPDATE listings
-                    SET unlock_count = COALESCE(unlock_count, 0) + 1
-                    WHERE id = %s
-                """, (listing_id,))
-
-                print("UPDATED LISTING:", listing_id)
-
-            else:
-                print(
-                    "WARNING: No unlock matched MerchantRequestID:",
-                    unlock_ref
-                )
-
-        # ------------------------------------------------
-        # Failed payment
-        # ------------------------------------------------
+        # Decide what really happened
+        if signed_ok and str(unlock["id"]) == url_uid:
+            outcome = "success" if claims_success else "failed"
+        elif not PAYHERO_VERIFY:
+            outcome = "success" if claims_success else "failed"   # old behaviour, only if explicitly switched off
         else:
+            outcome = _payhero_status(unlock["mpesa_checkout_request_id"])
+            if outcome is None or outcome == "pending":
+                print("CALLBACK: unverified, leaving pending for status polling")
+                return jsonify({"status": "ok"}), 200
 
-            cur.execute("""
-                UPDATE unlocks
-                SET status = 'failed'
-                WHERE mpesa_checkout_request_id = %s
-                  AND status <> 'completed'
-            """, (unlock_ref,))
-
-            print("UNLOCK MARKED FAILED:", unlock_ref)
-
+        if outcome == "success":
+            _complete_unlock(cur, unlock["id"], receipt)
+        elif outcome == "failed":
+            cur.execute("UPDATE unlocks SET status='failed' WHERE id=%s AND status <> 'completed'", (unlock["id"],))
         conn.commit()
-
-        print("CALLBACK PROCESSED SUCCESSFULLY")
-        print("====================================")
-
-        return jsonify({
-            "status": "ok"
-        }), 200
-
+        print("CALLBACK PROCESSED:", unlock["id"], outcome)
+        return jsonify({"status": "ok"}), 200
     except Exception as e:
-
         if conn:
-            conn.rollback()
-
-        print("========== CALLBACK ERROR ==========")
-        print("ERROR:", str(e))
-        print("====================================")
-
-        return jsonify({
-            "status": "error",
-            "error": str(e)
-        }), 500
-
+            try: conn.rollback()
+            except Exception: pass
+        print("CALLBACK ERROR:", e)
+        return jsonify({"status": "error"}), 500
     finally:
-
         if conn:
             conn.close()
 
 @app.route("/api/unlock/status/<listing_id>")
 @require_auth
 def unlock_status(user, listing_id):
-
     conn = get_db()
     cur = conn.cursor()
-
     cur.execute("""
-        SELECT
-            u.status,
-            p.full_name AS landlord_name,
-            p.phone AS landlord_phone,
-            au.email AS landlord_email
+        SELECT u.id, u.status, u.mpesa_checkout_request_id,
+               p.full_name AS landlord_name, p.phone AS landlord_phone,
+               au.email AS landlord_email, l.street_address
         FROM unlocks u
         JOIN listings l ON l.id = u.listing_id
         JOIN profiles p ON p.id = l.landlord_id
         JOIN auth.users au ON au.id = p.id
-        WHERE u.tenant_id = %s
-          AND u.listing_id = %s
+        WHERE u.tenant_id = %s AND u.listing_id = %s
     """, (str(user.id), listing_id))
-
     u = cur.fetchone()
-    conn.close()
 
     if not u:
+        conn.close()
         return jsonify({"status": "not_unlocked"}), 200
+
+    # Still pending? Ask PayHero directly (at most every 6s per unlock) in case the callback was lost
+    if u["status"] == "pending" and u["mpesa_checkout_request_id"] and not _rate_limited(f"verify:{u['id']}", 1, 6):
+        outcome = _payhero_status(u["mpesa_checkout_request_id"])
+        if outcome == "success":
+            _complete_unlock(cur, u["id"], None); conn.commit()
+            u = dict(u); u["status"] = "completed"
+        elif outcome == "failed":
+            cur.execute("UPDATE unlocks SET status='failed' WHERE id=%s AND status='pending'", (u["id"],)); conn.commit()
+            u = dict(u); u["status"] = "failed"
+    conn.close()
 
     if u["status"] == "completed":
         return jsonify({
             "status": "completed",
             "landlord_name": u["landlord_name"],
             "landlord_phone": u["landlord_phone"],
-            "landlord_email": u["landlord_email"]
+            "landlord_email": u["landlord_email"],
+            "street_address": u["street_address"],
         }), 200
 
     return jsonify({"status": u["status"]}), 200
@@ -901,7 +1316,10 @@ def unlock_status(user, listing_id):
 def my_unlocks(user):
     conn = get_db(); cur = conn.cursor()
     cur.execute("""
-        SELECT u.*,l.id AS listing_id,l.title,c.name AS county_name,a.name AS area_name,l.monthly_rent,l.property_type
+        SELECT u.*,l.id AS listing_id,l.title,c.name AS county_name,a.name AS area_name,l.monthly_rent,l.property_type,
+               l.status AS listing_status,
+               EXISTS (SELECT 1 FROM listing_reports r WHERE r.listing_id=l.id AND r.tenant_id=u.tenant_id) AS reported,
+               (SELECT url FROM listing_media WHERE listing_id=l.id AND media_type='photo' ORDER BY sort_order LIMIT 1) AS cover_photo
         FROM unlocks u JOIN listings l ON l.id=u.listing_id
         JOIN counties c ON c.id=l.county_id
         LEFT JOIN areas a ON a.id=l.area_id

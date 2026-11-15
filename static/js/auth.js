@@ -77,7 +77,7 @@ const Auth = (() => {
       updateNavUI();
       closeAllModals();
       const u = r.data.user;
-      showToast('Welcome back, ' + (u.full_name || '').split(' ')[0] + '!', 'success');
+      showToast('Logged in as ' + ((u.full_name || '').split(' ')[0] || u.email) + '.', 'success');
       document.getElementById('login-form').reset();
       // Route to correct dashboard
       if (u.is_admin) {
@@ -89,7 +89,7 @@ const Auth = (() => {
       }
     } else {
       showEl(errEl);
-      errEl.textContent = r.data.error || 'Login failed. Check your credentials.';
+      errEl.textContent = r.data.error || 'That email and password don\'t match. Try again.';
     }
   }
 
@@ -103,16 +103,16 @@ const Auth = (() => {
       email:     document.getElementById('reg-email').value.trim().toLowerCase(),
       password:  document.getElementById('reg-password').value,
       phone:     document.getElementById('reg-phone').value.trim(),
-      id_number: document.getElementById('reg-idnumber').value.trim(),
-      location:  document.getElementById('reg-location').value.trim(),
+      id_number: ((document.getElementById('reg-idnumber') || {}).value || '').trim(),
+      location:  ((document.getElementById('reg-location') || {}).value || '').trim(),
       role:      document.getElementById('reg-role').value,
     };
 
     if (!payload.full_name || !payload.email || !payload.password || !payload.phone) {
-      showEl(errEl); errEl.textContent = 'Name, email, phone and password are required.'; return;
+      showEl(errEl); errEl.textContent = 'Fill in your name, email, phone number and a password.'; return;
     }
     if (payload.password.length < 6) {
-      showEl(errEl); errEl.textContent = 'Password must be at least 6 characters.'; return;
+      showEl(errEl); errEl.textContent = 'Use at least 6 characters for your password.'; return;
     }
 
     setLoading(btn, true);
@@ -123,12 +123,12 @@ const Auth = (() => {
 
     if (r.ok) {
       closeAllModals();
-      showToast('Account created! Check your email to confirm, then log in.', 'success');
+      showToast('Account created. Open the link we emailed you, then log in.', 'success');
       document.getElementById('register-form').reset();
       setTimeout(() => openModal('login-modal'), 600);
     } else {
       showEl(errEl);
-      errEl.textContent = r.data.error || 'Registration failed. Please try again.';
+      errEl.textContent = r.data.error || 'We couldn\'t create your account. Try again.';
     }
   }
 
@@ -136,14 +136,15 @@ const Auth = (() => {
     await API.logout();
     clear();
     updateNavUI();
-    showToast('Logged out successfully.', 'info');
+    showToast('Logged out.', 'info');
     Router.go('home');
   }
 
   async function restoreSession() {
     const token        = localStorage.getItem('mn_token');
     const refreshToken = localStorage.getItem('mn_refresh');
-    if (!token) { updateNavUI(); return; }
+    if (!token) { updateNavUI(); return false; }
+    const hadUser = !!current();
 
     const r = await API.me();
     if (r.ok) {
@@ -156,14 +157,15 @@ const Auth = (() => {
         // Attempt refresh via backend re-login is not possible without password,
         // so clear and ask user to log in again gracefully
         clear();
-        showToast('Your session expired. Please log in again.', 'info');
+        showToast('Your session expired. Log in again to continue.', 'info');
       } catch {
         clear();
       }
     } else {
-      clear();
+      if (r.status !== 0) clear(); // offline: keep the cached session
     }
     updateNavUI();
+    return hadUser && !current(); // true if the cached session turned out to be invalid
   }
 
   return { login, register, logout, current, isAdmin, updateNavUI, restoreSession, save };

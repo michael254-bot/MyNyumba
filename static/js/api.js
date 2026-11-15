@@ -2,6 +2,7 @@
 const API = (() => {
   const BASE = '';
   function getToken() { return localStorage.getItem('mn_token') || ''; }
+  let countiesCache = null; // counties rarely change; fetch once per page load
 
   async function req(method, path, body = null, isForm = false) {
     const headers = {};
@@ -27,7 +28,10 @@ const API = (() => {
     me:            () => req('GET', '/api/auth/me'),
     updateProfile: (data) => req('PUT', '/api/auth/profile', data),
     // Counties & areas
-    counties: () => req('GET', '/api/counties'),
+    counties: () => {
+      if (!countiesCache) countiesCache = req('GET', '/api/counties').then(r => { if (!r.ok) countiesCache = null; return r; });
+      return countiesCache;
+    },
     county:   (slug) => req('GET', `/api/counties/${slug}`),
     areas:    (countyId) => req('GET', `/api/areas?county_id=${countyId}`),
     // Listings
@@ -36,11 +40,16 @@ const API = (() => {
     createListing: (data) => req('POST', '/api/listings', data),
     updateListing: (id, data) => req('PUT', `/api/listings/${id}`, data),
     deleteListing: (id) => req('DELETE', `/api/listings/${id}`),
+    confirmListing: (id) => req('POST', `/api/listings/${id}/confirm`),
+    reportListing:  (id, data) => req('POST', `/api/listings/${id}/report`, data),
     // Landlord
     landlordListings: () => req('GET', '/api/landlord/listings'),
     // Media
     uploadMedia: (listingId, formData) => req('POST', `/api/listings/${listingId}/media`, formData, true),
     deleteMedia: (listingId, mediaId) => req('DELETE', `/api/listings/${listingId}/media/${mediaId}`),
+    signMedia:    (listingId, data) => req('POST', `/api/listings/${listingId}/media/sign`, data),
+    confirmMedia: (listingId, data) => req('POST', `/api/listings/${listingId}/media/confirm`, data),
+    ownListing:   (listingId) => req('GET', `/api/landlord/listings/${listingId}`),
     // Unlocks
     initiateUnlock: (listingId, phone) => req('POST', '/api/unlock/initiate', { listing_id: listingId, phone }),
     unlockStatus:   (listingId) => req('GET', `/api/unlock/status/${listingId}`),

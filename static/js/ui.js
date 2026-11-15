@@ -31,9 +31,7 @@ function typeLabel(t) {
 }
 
 function starsHtml(n, count) {
-  const filled = Math.round(n);
-  const s = '★'.repeat(filled) + '☆'.repeat(5 - filled);
-  return `<span style="color:#EF9F27">${s}</span> <span class="text-muted text-xs">${Number(n).toFixed(1)} (${count} review${count !== 1 ? 's' : ''})</span>`;
+  return `<i class="ti ti-star-filled"></i> <strong>${Number(n).toFixed(1)}</strong> <span>(${count} review${count !== 1 ? 's' : ''})</span>`;
 }
 
 function timeAgo(dateStr) {
@@ -46,8 +44,15 @@ function timeAgo(dateStr) {
   return `${Math.floor(d / 30)} months ago`;
 }
 
+/* Escape text for HTML content and attribute values */
 function escHtml(s) {
-  return String(s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+/* Escape text used as a '...' string argument inside an inline onclick="" */
+function jsStr(s) {
+  return escHtml(String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, ' '));
 }
 
 /* ── Toast ───────────────────────────────────────── */
@@ -55,7 +60,8 @@ function showToast(msg, type = 'info') {
   const icons = { success: 'ti-circle-check', error: 'ti-alert-circle', info: 'ti-info-circle' };
   const t = document.createElement('div');
   t.className = `toast ${type}`;
-  t.innerHTML = `<i class="ti ${icons[type] || icons.info}"></i><span>${msg}</span>`;
+  t.innerHTML = `<i class="ti ${icons[type] || icons.info}"></i><span></span>`;
+  t.querySelector('span').textContent = msg; // messages can include server text, so never as HTML
   el('toast-container').appendChild(t);
   setTimeout(() => t.remove(), 4000);
 }
@@ -99,10 +105,12 @@ function toggleMobileMenu() {
   if (!links) return;
   const open = links.classList.toggle('open');
   if (icon) icon.className = open ? 'ti ti-x' : 'ti ti-menu-2';
+  document.body.style.overflow = open ? 'hidden' : '';
 }
 function closeMobileMenu() {
   const links = el('nav-links');
   const icon  = el('burger-icon');
+  if (links && links.classList.contains('open')) document.body.style.overflow = '';
   if (links) links.classList.remove('open');
   if (icon)  icon.className = 'ti ti-menu-2';
 }
@@ -142,7 +150,7 @@ function setRating(val) {
 
 /* ── Active nav link highlight ───────────────────── */
 function setActiveNav(route) {
-  const map = { home:'nl-home', browse:'nl-browse', counties:'nl-counties', how:'nl-how' };
+  const map = { home:'nl-home', browse:'nl-browse', listing:'nl-browse', counties:'nl-counties', how:'nl-how' };
   document.querySelectorAll('.nav-links > a').forEach(a => a.classList.remove('active'));
   const id = map[route];
   if (id) { const a = el(id); if (a) a.classList.add('active'); }
@@ -152,6 +160,20 @@ function setActiveNav(route) {
 const Router = (() => {
   let currentRoute  = 'home';
   let currentParams = {};
+
+  /* Keep the address bar in sync so links can be shared and Back works */
+  function pathFor(route, params) {
+    const qs = p => { const s = new URLSearchParams(p).toString(); return s ? '?' + s : ''; };
+    switch (route) {
+      case 'home':         return '/';
+      case 'browse':       return '/browse' + qs(params);
+      case 'listing':      return '/listing/' + encodeURIComponent(params.id || '');
+      case 'add-listing':  return '/dashboard/new';
+      case 'edit-listing': return '/dashboard/edit/' + encodeURIComponent(params.id || '');
+      case 'how':          return '/#how-it-works';
+      default:             return '/' + route;
+    }
+  }
 
   const routes = {
     home:           () => Pages.home(),
@@ -167,10 +189,16 @@ const Router = (() => {
     how:            () => Pages.scrollToHow(),
   };
 
-  function go(route, params = {}) {
+  function go(route, params = {}, fromHistory = false) {
     currentRoute  = route;
     currentParams = params;
-    window.scrollTo(0, 0);
+    if (!fromHistory) {
+      const url = pathFor(route, params);
+      const here = location.pathname + location.search + location.hash;
+      const state = { route, params };
+      if (url !== here) history.pushState(state, '', url); else history.replaceState(state, '', url);
+    }
+    if (route !== 'how') window.scrollTo(0, 0);
     closeMobileMenu();
     closeUserMenu();
     setActiveNav(route);
@@ -184,7 +212,7 @@ const Router = (() => {
     if (fn) fn(); else Pages.home();
   }
 
-  return { go, refresh, current: () => currentRoute, params: () => currentParams };
+  return { go, refresh, pathFor, current: () => currentRoute, params: () => currentParams };
 })();
 
 /* ── Unlock module ───────────────────────────────── */
@@ -194,7 +222,7 @@ const Unlock = (() => {
   function open(listingId, title) {
     const user = Auth.current();
     if (!user) {
-      showToast('Please log in to unlock listings.', 'info');
+      showToast('Log in to get the landlord\'s number.', 'info');
       openModal('login-modal');
       return;
     }
@@ -204,7 +232,7 @@ const Unlock = (() => {
     hideEl(el('unlock-error'));
     hideEl(el('unlock-success'));
     const btn = el('unlock-submit-btn');
-    if (btn) { showEl(btn); btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-mobile-dollar"></i> Send M-Pesa Push'; }
+    if (btn) { showEl(btn); btn.disabled = false; btn.innerHTML = 'Pay Ksh 500 with M-Pesa'; }
     openModal('unlock-modal');
   }
 
@@ -214,7 +242,7 @@ const Unlock = (() => {
     const sucEl = el('unlock-success');
     const phone = (el('mpesa-phone') || {}).value || '';
 
-    if (!phone.trim()) { showEl(errEl); errEl.textContent = 'Enter your M-Pesa phone number.'; return; }
+    if (!phone.trim()) { showEl(errEl); errEl.textContent = 'Enter the M-Pesa number to send the prompt to.'; return; }
 
     hideEl(errEl); hideEl(sucEl);
     setLoading(btn, true);
@@ -224,7 +252,7 @@ const Unlock = (() => {
 
     if (r.ok) {
       showEl(sucEl);
-      sucEl.textContent = r.data.message || 'STK Push sent! Enter your M-Pesa PIN on your phone.';
+      sucEl.textContent = 'Check your phone and enter your M-Pesa PIN. This page updates once the payment goes through.';
       hideEl(btn);
       pollUnlock(_listingId);
     } else if (r.data.already_unlocked) {
@@ -232,7 +260,7 @@ const Unlock = (() => {
       Router.go('listing', { id: _listingId });
     } else {
       showEl(errEl);
-      errEl.textContent = r.data.error || 'M-Pesa request failed. Try again.';
+      errEl.textContent = r.data.error || 'We couldn\'t send the M-Pesa prompt. Check the number and try again.';
     }
   }
 
@@ -257,8 +285,8 @@ const Unlock = (() => {
         if (errEl) {
           showEl(errEl);
           errEl.textContent = r.status === 401
-            ? 'Session expired. Please log in again.'
-            : 'Could not verify payment status. Please check your M-Pesa messages. If you paid, contact support.';
+            ? 'Your session has expired. Log in again to finish.'
+            : 'We couldn\'t confirm the payment. If M-Pesa took the money, WhatsApp us on +254 703 245 513 with the confirmation message.';
         }
         hideEl(sucEl);
         const btn = el('unlock-submit-btn');
@@ -269,7 +297,7 @@ const Unlock = (() => {
       if (r.data.status === 'completed') {
         clearInterval(interval);
         closeAllModals();
-        showToast('Payment confirmed! Contact details unlocked.', 'success');
+        showToast('Payment received. The landlord\'s number is below.', 'success');
         Router.go('listing', { id: listingId });
       } else if (tries >= 20 || r.data.status === 'failed') {
         clearInterval(interval);
@@ -278,8 +306,8 @@ const Unlock = (() => {
         if (errEl) {
           showEl(errEl);
           errEl.textContent = r.data.status === 'failed'
-            ? 'Payment failed or cancelled. Please try again.'
-            : 'Payment not confirmed yet. If you paid, please contact support.';
+            ? 'The payment was cancelled or didn\'t go through. You haven\'t been charged, so you can try again.'
+            : 'No confirmation from M-Pesa yet. If you paid, WhatsApp us on +254 703 245 513 and we\'ll sort it out.';
         }
         hideEl(sucEl);
         const btn = el('unlock-submit-btn');
@@ -297,7 +325,7 @@ const Reviews = (() => {
 
   function open(listingId) {
     const user = Auth.current();
-    if (!user) { showToast('Please log in to leave a review.', 'info'); openModal('login-modal'); return; }
+    if (!user) { showToast('Log in to review this house.', 'info'); openModal('login-modal'); return; }
     _listingId = listingId;
     setRating(0);
     if (el('review-comment')) el('review-comment').value = '';
@@ -310,20 +338,54 @@ const Reviews = (() => {
     const rating  = parseInt((el('review-rating') || {}).value || 0);
     const comment = (el('review-comment') || {}).value.trim();
     const errEl   = el('review-error');
-    if (!rating) { showEl(errEl); errEl.textContent = 'Please select a rating.'; return; }
+    if (!rating) { showEl(errEl); errEl.textContent = 'Pick a star rating first.'; return; }
     const btn = e.submitter;
     setLoading(btn, true);
     const r = await API.addReview(_listingId, { rating, comment });
     setLoading(btn, false);
     if (r.ok) {
       closeAllModals();
-      showToast('Review submitted. Thank you!', 'success');
+      showToast('Review posted.', 'success');
       Router.go('listing', { id: _listingId });
     } else {
       showEl(errEl);
-      errEl.textContent = r.data.error || 'Failed to submit review.';
+      errEl.textContent = r.data.error || 'Your review didn\'t post. Try again.';
     }
   }
 
+  return { open, submit };
+})();
+/* Escape closes any open modal or menu */
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (document.querySelector('.lightbox')) return; // lightbox handles its own Escape
+  closeAllModals(); closeUserMenu(); closeMobileMenu();
+});
+
+/* ── Reports module (tenant says a house is taken / number is wrong) ── */
+const Reports = (() => {
+  let _listingId = null;
+  function open(listingId) {
+    if (!Auth.current()) { openModal('login-modal'); return; }
+    _listingId = listingId;
+    document.querySelectorAll('input[name="report-reason"]').forEach(r => { r.checked = false; });
+    if (el('report-note')) el('report-note').value = '';
+    hideEl(el('report-error'));
+    openModal('report-modal');
+  }
+  async function submit(e) {
+    e.preventDefault();
+    const picked = document.querySelector('input[name="report-reason"]:checked');
+    const errEl = el('report-error');
+    if (!picked) { showEl(errEl); errEl.textContent = 'Pick what went wrong.'; return; }
+    const btn = e.submitter; setLoading(btn, true);
+    const r = await API.reportListing(_listingId, { reason: picked.value, note: (el('report-note') || {}).value || '' });
+    setLoading(btn, false);
+    if (r.ok) {
+      closeAllModals();
+      showToast(r.data.listing_hidden ? 'Thanks. Other tenants reported this too, so it\'s hidden until the landlord confirms.' : 'Thanks. We\'ll look into it.', 'success');
+      Router.refresh();
+    } else { showEl(errEl); errEl.textContent = r.data.error || 'Your report didn\'t send. Try again.'; }
+  }
   return { open, submit };
 })();
