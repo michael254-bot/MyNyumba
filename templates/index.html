@@ -143,6 +143,7 @@
     </div>
     <div id="register-error" class="form-error hidden"></div>
     <button type="submit" class="btn-primary btn-block" id="register-submit">Create account</button>
+    <p class="terms-note">By creating an account you agree to our <a href="/terms" onclick="closeAllModals();Router.go('terms');return false;">Terms</a> and <a href="/privacy" onclick="closeAllModals();Router.go('privacy');return false;">Privacy policy</a>.</p>
   </form>
   <p class="modal-switch">Already have an account? <a href="#" onclick="switchModal('register-modal','login-modal');return false;">Log in</a></p>
 </div>
@@ -161,14 +162,38 @@
     </div>
     <strong>Ksh 500</strong>
   </div>
-  <div class="form-group">
-    <label for="mpesa-phone">M-Pesa number</label>
-    <input type="tel" id="mpesa-phone" placeholder="07XX XXX XXX" autocomplete="tel"/>
-  </div>
   <div id="unlock-error" class="form-error hidden"></div>
   <div id="unlock-success" class="form-success hidden"></div>
-  <button class="btn-primary btn-block" id="unlock-submit-btn" onclick="Unlock.initiate()">Pay Ksh 500 with M-Pesa</button>
-  <p class="modal-note">An M-Pesa prompt pops up on this phone within a few seconds. Enter your PIN and the landlord's number appears here. You're only charged if you enter your PIN. No prompt after a minute? Check the number and press pay again.</p>
+  <div id="unlock-stk">
+    <div class="form-group">
+      <label for="mpesa-phone">M-Pesa number</label>
+      <input type="tel" id="mpesa-phone" placeholder="07XX XXX XXX" autocomplete="tel"/>
+    </div>
+    <button class="btn-primary btn-block" id="unlock-submit-btn" onclick="Unlock.initiate()">Pay Ksh 500 with M-Pesa</button>
+    <p class="modal-note">An M-Pesa prompt pops up on this phone within a few seconds. Enter your PIN and the landlord's number appears here. You're only charged if you enter your PIN.</p>
+    <p class="terms-note">See our <a href="/terms" onclick="closeAllModals();Router.go('terms');return false;">refund terms</a>.</p>
+    <button type="button" class="report-link hidden" id="unlock-manual-link" onclick="Unlock.showManual()">Prompt not coming? Pay with Send Money instead</button>
+  </div>
+  <div id="unlock-manual" class="hidden">
+    <ol class="pay-steps">
+      <li>On your phone, open <strong>M-Pesa</strong> and choose <strong>Send Money</strong>.</li>
+      <li>Send <strong>Ksh 500</strong> to <strong id="manual-pay-number">0703 245 513</strong><span id="manual-pay-name"></span>.</li>
+      <li>Copy the M-Pesa code from the confirmation SMS (10 letters and numbers, like SKL3X9ABC1) and enter it below.</li>
+    </ol>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="manual-code">M-Pesa code</label>
+        <input type="text" id="manual-code" maxlength="12" placeholder="SKL3X9ABC1" autocapitalize="characters" autocomplete="off" style="text-transform:uppercase"/>
+      </div>
+      <div class="form-group">
+        <label for="manual-phone">Phone you paid from</label>
+        <input type="tel" id="manual-phone" placeholder="07XX XXX XXX" autocomplete="tel"/>
+      </div>
+    </div>
+    <button class="btn-primary btn-block" id="manual-submit-btn" onclick="Unlock.submitManual()">Send M-Pesa code</button>
+    <p class="modal-note">We match your code against our M-Pesa statement, then the landlord's number appears on the house page and under Unlocked houses. Each code works once.</p>
+    <button type="button" class="report-link" onclick="Unlock.showStk()">Back to the M-Pesa prompt</button>
+  </div>
 </div>
 
 <!-- ══ REVIEW MODAL ══════════════════════════════════════════════════════════ -->
@@ -227,6 +252,7 @@
 <script src="/static/js/ui.js?v={{ v }}" defer></script>
 <script src="/static/js/uploader.js?v={{ v }}" defer></script>
 <script src="/static/js/pages.js?v={{ v }}" defer></script>
+<script src="/static/js/legal.js?v={{ v }}" defer></script>
 <script src="/static/js/app.js?v={{ v }}" defer></script>
 </body>
 </html>

@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
+import psycopg2.errors
 from supabase import create_client, Client
 
 load_dotenv()
@@ -800,7 +801,8 @@ def admin_stats(user):
           (SELECT COUNT(*) FROM profiles WHERE role='landlord') AS landlords,
           (SELECT COUNT(*) FROM profiles WHERE role='tenant') AS tenants,
           (SELECT COUNT(*) FROM unlocks WHERE status='completed') AS total_unlocks,
-          (SELECT COUNT(DISTINCT listing_id) FROM listing_reports WHERE resolved_at IS NULL) AS reported_listings
+          (SELECT COUNT(DISTINCT listing_id) FROM listing_reports WHERE resolved_at IS NULL) AS reported_listings,
+          (SELECT COUNT(*) FROM unlocks WHERE status='manual_review') AS manual_pending
     """)
     stats = cur.fetchone(); conn.close()
     return jsonify(dict(stats) if stats else {}), 200
@@ -1153,6 +1155,8 @@ def initiate_unlock(user):
     existing = cur.fetchone()
     if existing and existing["status"]=="completed":
         conn.close(); return jsonify({"error":"Already unlocked","already_unlocked":True}), 409
+    if existing and existing["status"]=="manual_review":
+        conn.close(); return jsonify({"error":"We're already checking the M-Pesa code you sent for this house.","manual_review":True}), 409
     cur.execute("SELECT id, landlord_id FROM listings WHERE id=%s AND status='active'", (listing_id,))
     listing = cur.fetchone()
     if not listing: conn.close(); return jsonify({"error":"Listing not found"}), 404
@@ -1274,7 +1278,7 @@ def unlock_status(user, listing_id):
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT u.id, u.status, u.mpesa_checkout_request_id,
+        SELECT u.id, u.status, u.mpesa_checkout_request_id, u.manual_code, u.review_note,
                p.full_name AS landlord_name, p.phone AS landlord_phone,
                au.email AS landlord_email, l.street_address
         FROM unlocks u
@@ -1309,7 +1313,114 @@ def unlock_status(user, listing_id):
             "street_address": u["street_address"],
         }), 200
 
+    if u["status"] == "manual_review":
+        return jsonify({"status": "manual_review", "manual_code": u["manual_code"]}), 200
+    if u["status"] == "failed" and u["review_note"]:
+        return jsonify({"status": "failed", "review_note": u["review_note"]}), 200
     return jsonify({"status": u["status"]}), 200
+
+# ── MANUAL M-PESA PAYMENTS (fallback when the STK prompt doesn't work) ───────
+MANUAL_PAYMENTS_ON  = os.getenv("MANUAL_PAYMENTS", "true").lower() != "false"
+MANUAL_PAY_NUMBER   = os.getenv("MANUAL_PAYMENT_NUMBER", "0703 245 513")
+MANUAL_PAY_NAME     = os.getenv("MANUAL_PAYMENT_NAME", "")      # name M-Pesa shows when sending, if you want tenants to check it
+MPESA_CODE_RE       = re.compile(r"^[A-Z0-9]{10}$")
+
+@app.route("/api/config/payments")
+def payment_config():
+    resp = jsonify({"manual_enabled": MANUAL_PAYMENTS_ON, "manual_number": MANUAL_PAY_NUMBER,
+                    "manual_name": MANUAL_PAY_NAME, "price": UNLOCK_PRICE})
+    resp.headers["Cache-Control"] = "public, max-age=300"
+    return resp, 200
+
+@app.route("/api/unlock/manual", methods=["POST"])
+@require_auth
+def submit_manual_payment(user):
+    """Tenant paid by Send Money and gives us the M-Pesa code; the admin checks it."""
+    if not MANUAL_PAYMENTS_ON:
+        return jsonify({"error": "Manual payments are switched off."}), 403
+    data       = request.json or {}
+    listing_id = data.get("listing_id")
+    code       = re.sub(r"\s+", "", str(data.get("code", ""))).upper()
+    phone      = re.sub(r"[\s+\-]", "", str(data.get("phone", "")))
+    if phone.startswith("0"): phone = "254" + phone[1:]
+    if not listing_id:
+        return jsonify({"error": "listing_id required"}), 400
+    if not MPESA_CODE_RE.match(code):
+        return jsonify({"error": "M-Pesa codes are 10 letters and numbers, like SKL3X9ABC1. Copy it from the confirmation SMS."}), 400
+    if not re.fullmatch(r"254[17]\d{8}", phone):
+        return jsonify({"error": "Enter the phone number you paid from, like 0712 345 678."}), 400
+    if _rate_limited(f"manual:{user.id}", 6, 3600):
+        return jsonify({"error": "Too many attempts. Try again in an hour or WhatsApp us."}), 429
+
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT id, landlord_id FROM listings WHERE id=%s AND status='active'", (listing_id,))
+    listing = cur.fetchone()
+    if not listing:
+        conn.close(); return jsonify({"error": "Listing not found"}), 404
+    if str(listing["landlord_id"]) == str(user.id):
+        conn.close(); return jsonify({"error": "This is your own listing."}), 400
+    cur.execute("SELECT id, status FROM unlocks WHERE tenant_id=%s AND listing_id=%s", (str(user.id), listing_id))
+    existing = cur.fetchone()
+    if existing and existing["status"] == "completed":
+        conn.close(); return jsonify({"error": "Already unlocked", "already_unlocked": True}), 409
+    cur.execute("SELECT 1 FROM unlocks WHERE upper(manual_code)=%s OR upper(mpesa_receipt_number)=%s LIMIT 1", (code, code))
+    if cur.fetchone():
+        conn.close(); return jsonify({"error": "That M-Pesa code has already been used. Each payment unlocks one house."}), 409
+    try:
+        cur.execute("""
+            INSERT INTO unlocks (tenant_id, listing_id, phone, status, payment_method, manual_code, manual_submitted_at, review_note)
+            VALUES (%s,%s,%s,'manual_review','manual',%s,NOW(),NULL)
+            ON CONFLICT (tenant_id, listing_id) DO UPDATE
+              SET phone=EXCLUDED.phone, status='manual_review', payment_method='manual',
+                  manual_code=EXCLUDED.manual_code, manual_submitted_at=NOW(), review_note=NULL
+        """, (str(user.id), listing_id, phone, code))
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback(); conn.close()
+        return jsonify({"error": "That M-Pesa code has already been used. Each payment unlocks one house."}), 409
+    conn.close()
+    print("MANUAL PAYMENT SUBMITTED:", user.id, listing_id, code)
+    return jsonify({"message": "Code received. We'll unlock the house once we've matched your payment."}), 201
+
+@app.route("/api/admin/manual-payments")
+@require_admin
+def admin_manual_payments(user):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+        SELECT u.id, u.manual_code, u.phone, u.amount, u.manual_submitted_at,
+               l.id AS listing_id, l.title, p.full_name AS tenant_name, au.email AS tenant_email
+        FROM unlocks u
+        JOIN listings l ON l.id = u.listing_id
+        LEFT JOIN profiles p ON p.id = u.tenant_id
+        LEFT JOIN auth.users au ON au.id = u.tenant_id
+        WHERE u.status = 'manual_review'
+        ORDER BY u.manual_submitted_at
+    """)
+    rows = cur.fetchall(); conn.close()
+    return jsonify([dict(r) for r in rows]), 200
+
+@app.route("/api/admin/manual-payments/<unlock_id>/<action>", methods=["POST"])
+@require_admin
+def admin_review_manual_payment(user, unlock_id, action):
+    if action not in ("approve", "reject"):
+        return jsonify({"error": "Unknown action"}), 400
+    note = str((request.get_json(silent=True) or {}).get("note") or "").strip()[:300]
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT id, status, manual_code FROM unlocks WHERE id=%s FOR UPDATE", (unlock_id,))
+    u = cur.fetchone()
+    if not u or u["status"] != "manual_review":
+        conn.close(); return jsonify({"error": "This payment isn't waiting for review."}), 409
+    if action == "approve":
+        _complete_unlock(cur, u["id"], u["manual_code"])
+        cur.execute("UPDATE unlocks SET reviewed_at=NOW() WHERE id=%s", (u["id"],))
+        msg = "Payment approved. The tenant can see the landlord's number now."
+    else:
+        cur.execute("UPDATE unlocks SET status='failed', reviewed_at=NOW(), review_note=%s WHERE id=%s",
+                    (note or "We couldn't find this payment in our M-Pesa statement.", u["id"]))
+        msg = "Payment rejected."
+    conn.commit(); conn.close()
+    print("MANUAL PAYMENT", action.upper(), unlock_id, "by", user.email)
+    return jsonify({"message": msg}), 200
 
 @app.route("/api/unlock/my")
 @require_auth

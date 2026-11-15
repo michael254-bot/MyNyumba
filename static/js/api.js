@@ -41,6 +41,10 @@ const API = (() => {
     updateListing: (id, data) => req('PUT', `/api/listings/${id}`, data),
     deleteListing: (id) => req('DELETE', `/api/listings/${id}`),
     confirmListing: (id) => req('POST', `/api/listings/${id}/confirm`),
+    paymentConfig:  () => req('GET', '/api/config/payments'),
+    manualUnlock:   (data) => req('POST', '/api/unlock/manual', data),
+    adminManualPayments: () => req('GET', '/api/admin/manual-payments'),
+    adminReviewPayment:  (id, action, note) => req('POST', `/api/admin/manual-payments/${id}/${action}`, { note: note || '' }),
     reportListing:  (id, data) => req('POST', `/api/listings/${id}/report`, data),
     // Landlord
     landlordListings: () => req('GET', '/api/landlord/listings'),
