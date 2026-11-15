@@ -2,8 +2,44 @@
 const Pages = (() => {
   const app = () => document.getElementById('app');
 
+  const PROPERTY_TYPES = [
+    ['bedsitter','Bedsitter'],['studio','Studio'],['1_bedroom','1 bedroom'],['2_bedroom','2 bedroom'],
+    ['3_bedroom','3 bedroom'],['4_bedroom','4 bedroom'],['bungalow','Bungalow'],['maisonette','Maisonette'],
+    ['townhouse','Townhouse'],['apartment','Apartment']
+  ];
+  const AMENITIES = [
+    ['has_water','Running water','ti-droplet'],['has_borehole','Borehole','ti-droplet'],
+    ['has_security','24-hour security','ti-shield-check'],['has_cctv','CCTV','ti-video'],
+    ['has_parking','Parking','ti-car'],['has_wifi','WiFi included','ti-wifi'],
+    ['has_electricity_token','Token electricity','ti-bolt'],['has_generator','Backup generator','ti-bolt'],
+    ['is_furnished','Furnished','ti-armchair'],['has_dsq','DSQ','ti-home'],
+    ['has_garbage','Garbage collection','ti-trash'],['has_caretaker','Caretaker on site','ti-user-check'],
+    ['has_gym','Gym','ti-barbell'],['has_pool','Swimming pool','ti-pool'],
+    ['has_playground','Playground','ti-mood-kid'],['is_pet_friendly','Pets allowed','ti-paw'],
+    ['has_balcony','Balcony','ti-building'],['has_lift','Lift','ti-elevator'],
+  ];
+  const NEARBY = [
+    ['near_school','School','ti-school'],['near_hospital','Hospital or clinic','ti-building-hospital'],
+    ['near_market','Market or supermarket','ti-shopping-cart'],['near_matatu','Matatu stage','ti-bus'],
+    ['near_church','Place of worship','ti-building-church'],['near_water_kiosk','Water kiosk','ti-droplet'],
+  ];
+  const AMENITY_FILTERS = [['','Any'],['water=true','Water'],['parking=true','Parking'],['wifi=true','WiFi'],
+    ['security=true','Security'],['furnished=true','Furnished'],['dsq=true','DSQ'],['gym=true','Gym'],
+    ['cctv=true','CCTV'],['borehole=true','Borehole'],['generator=true','Generator'],
+    ['pet_friendly=true','Pets allowed'],['pool=true','Pool']];
+
+  function typeOptions(selected = '', anyLabel = 'Any type') {
+    return `<option value="">${anyLabel}</option>` +
+      PROPERTY_TYPES.map(([v,l]) => `<option value="${v}" ${selected===v?'selected':''}>${l}</option>`).join('');
+  }
+
   function loading() {
-    app().innerHTML = `<div class="loading-state"><div class="spinner"></div><span>Loading…</span></div>`;
+    app().innerHTML = `<div class="loading-state"><span class="spinner"></span><span>Loading…</span></div>`;
+  }
+
+  function skeletonGrid(n = 8) {
+    return `<div class="cards-grid" aria-busy="true">${Array.from({length:n}).map(() =>
+      `<div><div class="skel skel-img"></div><div class="skel skel-line"></div><div class="skel skel-line short"></div></div>`).join('')}</div>`;
   }
 
   function emptyState(icon, title, msg, btnLabel, btnAction) {
@@ -13,19 +49,22 @@ const Pages = (() => {
     </div>`;
   }
 
-  /* ── Shared: listing card ── */
+  function placeLine(area, county) {
+    return [area, county].filter(Boolean).map(escHtml).join(', ');
+  }
+
+  /* ── Shared: listing tile ── */
   function listingCard(l, showUnlocked = false) {
-    const tags = [];
-    if (l.has_water)    tags.push('Water');
-    if (l.has_security) tags.push('Security');
-    if (l.has_parking)  tags.push('Parking');
-    if (l.has_wifi)     tags.push('WiFi');
-    if (l.is_furnished) tags.push('Furnished');
-    if (l.has_gym)      tags.push('Gym');
+    const extras = [];
+    if (l.has_water)    extras.push('water');
+    if (l.has_security) extras.push('security');
+    if (l.has_parking)  extras.push('parking');
+    if (l.has_wifi)     extras.push('WiFi');
+    if (l.is_furnished) extras.push('furnished');
 
     const imgHtml = l.cover_photo
-      ? `<img src="${l.cover_photo}" alt="${escHtml(l.title)}" loading="lazy"/>`
-      : `<i class="ti ti-building card-img-placeholder"></i>`;
+      ? `<img src="${escHtml(l.cover_photo)}" alt="" loading="lazy" decoding="async" width="600" height="570"/>`
+      : `<i class="ti ti-photo card-img-placeholder"></i>`;
 
     const isNew  = (Date.now() - new Date(l.created_at)) < 7 * 86400000;
     const badge  = l.is_featured
@@ -35,57 +74,43 @@ const Pages = (() => {
     const ratingHtml = l.review_count > 0
       ? `<div class="card-rating"><i class="ti ti-star-filled"></i>${Number(l.average_rating).toFixed(1)} <span>(${l.review_count})</span></div>` : '';
 
-    return `<div class="listing-card" onclick="Router.go('listing',{id:'${l.id}'})">
+    const go = `Router.go('listing',{id:'${jsStr(l.id)}'})`;
+    return `<article class="listing-card" tabindex="0" role="link" aria-label="${escHtml(l.title)}" onclick="${go}" onkeydown="if(event.key==='Enter'){${go}}">
       <div class="card-img">${imgHtml}${badge}</div>
       <div class="card-body">
-        <div class="card-title">${escHtml(l.title)}</div>
-        <div class="card-loc"><i class="ti ti-map-pin"></i>${l.area_name ? escHtml(l.area_name)+' · ' : ''}${escHtml(l.county_name)}</div>
-        <div class="card-tags">
-          <span class="ctag">${typeLabel(l.property_type)}</span>
-          ${tags.slice(0,2).map(t=>`<span class="ctag">${t}</span>`).join('')}
-        </div>
-        ${ratingHtml}
+        <div class="card-row"><h3 class="card-title">${escHtml(l.title)}</h3>${ratingHtml}</div>
+        <div class="card-loc">${placeLine(l.area_name, l.county_name)}</div>
+        <div class="card-tags">${[typeLabel(l.property_type)].concat(extras.slice(0,2)).join(', ')}</div>
         <div class="card-footer">
-          <div class="card-price">${formatPrice(l.monthly_rent)}<small>/mo</small></div>
+          <div class="card-price">${formatPrice(l.monthly_rent)}<small> a month</small></div>
           ${showUnlocked
-            ? `<button class="unlock-btn unlocked" onclick="event.stopPropagation();Router.go('listing',{id:'${l.id}'})"><i class="ti ti-check"></i> View</button>`
-            : `<button class="unlock-btn" onclick="event.stopPropagation();Unlock.open('${l.id}','${escHtml(l.title)}')"><i class="ti ti-lock"></i> Unlock</button>`}
+            ? `<button class="unlock-btn unlocked" onclick="event.stopPropagation();${go}"><i class="ti ti-check"></i> Unlocked</button>`
+            : `<button class="unlock-btn" onclick="event.stopPropagation();Unlock.open('${jsStr(l.id)}','${jsStr(l.title)}')" aria-label="Get landlord's number for ${escHtml(l.title)}"><i class="ti ti-lock"></i> Ksh 500</button>`}
         </div>
       </div>
-    </div>`;
+    </article>`;
   }
 
   /* ── Shared: search box ── */
-  function searchBoxHTML(ctx) {
-    return `<div class="search-box" id="search-box-${ctx}">
+  function searchBoxHTML(ctx, values = {}) {
+    return `<form class="search-box" id="search-box-${ctx}" role="search" onsubmit="event.preventDefault();doSearch('${ctx}')">
       <div class="search-icon"><i class="ti ti-search"></i></div>
       <div class="autocomplete-wrap">
-        <input type="text" id="search-input-${ctx}" placeholder="Estate, area, county or town…"
-          oninput="handleSearchInput('${ctx}',this.value)"
-          onkeydown="if(event.key==='Enter'){doSearch('${ctx}')}"
-          autocomplete="off"/>
+        <label class="sr-only" for="search-input-${ctx}">Where do you want to live?</label>
+        <input type="text" id="search-input-${ctx}" placeholder="Estate, town or county" value="${escHtml(values.q||'')}"
+          oninput="handleSearchInput('${ctx}',this.value)" autocomplete="off"/>
         <div class="autocomplete-list hidden" id="ac-list-${ctx}"></div>
       </div>
-      <select id="search-type-${ctx}">
-        <option value="">All types</option>
-        <option value="bedsitter">Bedsitter</option>
-        <option value="studio">Studio</option>
-        <option value="1_bedroom">1 Bedroom</option>
-        <option value="2_bedroom">2 Bedroom</option>
-        <option value="3_bedroom">3 Bedroom</option>
-        <option value="4_bedroom">4 Bedroom</option>
-        <option value="bungalow">Bungalow</option>
-        <option value="maisonette">Maisonette</option>
-      </select>
+      <label class="sr-only" for="search-type-${ctx}">House type</label>
+      <select id="search-type-${ctx}">${typeOptions(values.type||'')}</select>
+      <label class="sr-only" for="search-price-${ctx}">Rent</label>
       <select id="search-price-${ctx}">
-        <option value="">Any price</option>
-        <option value="10000">Under 10k</option>
-        <option value="20000">Under 20k</option>
-        <option value="40000">Under 40k</option>
-        <option value="80000">Under 80k</option>
+        <option value="">Any rent</option>
+        ${[['10000','Up to 10k'],['20000','Up to 20k'],['40000','Up to 40k'],['80000','Up to 80k']]
+          .map(([v,l]) => `<option value="${v}" ${String(values.max_price||'')===v?'selected':''}>${l}</option>`).join('')}
       </select>
-      <button class="search-btn" onclick="doSearch('${ctx}')"><i class="ti ti-search"></i> Search</button>
-    </div>`;
+      <button class="search-btn" type="submit"><i class="ti ti-search"></i> Search</button>
+    </form>`;
   }
 
   function initSearchBox(ctx) {
@@ -99,12 +124,12 @@ const Pages = (() => {
         const r = await API.suggest(val);
         if (!r.ok || !r.data.length) { list && hideEl(list); return; }
         list.innerHTML = r.data.map(item => `
-          <div class="ac-item" onclick="selectSuggestion('${c}','${escHtml(item.name)}','${item.type}','${item.value}')">
+          <div class="ac-item" onclick="selectSuggestion('${c}','${jsStr(item.name)}','${jsStr(item.type)}','${jsStr(item.value)}')">
             <i class="ti ${item.type==='county'?'ti-map':item.type==='area'?'ti-map-pin':'ti-building'}"></i>
-            ${escHtml(item.name)}<span class="ac-type">${item.type}</span>
+            ${escHtml(item.name)}<span class="ac-type">${item.type === 'listing' ? 'house' : escHtml(item.type)}</span>
           </div>`).join('');
         showEl(list);
-      }, 280);
+      }, 250);
     };
     window.selectSuggestion = (c, name, type, value) => {
       const inp = el(`search-input-${c}`);
@@ -120,7 +145,7 @@ const Pages = (() => {
       const type  = (el(`search-type-${c}`)  || {}).value || '';
       const price = (el(`search-price-${c}`) || {}).value || '';
       const params = {};
-      if (q)     params.q         = q;
+      if (q)     params.q         = q.trim();
       if (type)  params.type      = type;
       if (price) params.max_price = price;
       Router.go('browse', params);
@@ -137,40 +162,37 @@ const Pages = (() => {
       <div class="footer-inner">
         <div class="footer-top">
           <div class="footer-brand">
-            <span class="logo">My<span style="color:#fff">Nyumba Homes</span></span>
-            <p>Find verified rental houses across all 47 counties in Kenya. Pay Ksh 500 to unlock landlord contacts.</p>
+            <a href="/" class="logo" onclick="Router.go('home');return false;"><span class="logo-my">my</span>nyumba</a>
+            <p>Rental houses in all 47 counties. Browse for free and pay Ksh 500 only for the landlords you want to call.</p>
           </div>
           <div class="footer-links-group">
-            <h4>Navigate</h4>
+            <h4>Find a house</h4>
             <div class="footer-links">
-              <a href="#" onclick="Router.go('home');return false;"><i class="ti ti-home"></i> Home</a>
-              <a href="#" onclick="Router.go('browse');return false;"><i class="ti ti-search"></i> Browse listings</a>
-              <a href="#" onclick="Router.go('counties');return false;"><i class="ti ti-map"></i> All counties</a>
-              <a href="#" onclick="Router.go('how');return false;"><i class="ti ti-help-circle"></i> How it works</a>
+              <a href="/browse" onclick="Router.go('browse');return false;">Browse houses</a>
+              <a href="/counties" onclick="Router.go('counties');return false;">Counties</a>
+              <a href="/#how-it-works" onclick="Router.go('how');return false;">How it works</a>
+              <a href="/unlocks" onclick="Router.go('unlocks');return false;">Houses you've unlocked</a>
             </div>
           </div>
           <div class="footer-links-group">
-            <h4>Account</h4>
+            <h4>Landlords</h4>
             <div class="footer-links">
-              <a href="#" onclick="openModal('register-modal');return false;"><i class="ti ti-user-plus"></i> Sign up free</a>
-              <a href="#" onclick="openModal('login-modal');return false;"><i class="ti ti-login"></i> Log in</a>
-              <a href="#" onclick="Router.go('dashboard');return false;"><i class="ti ti-layout-dashboard"></i> Landlord dashboard</a>
-              <a href="#" onclick="Router.go('unlocks');return false;"><i class="ti ti-key"></i> My unlocked houses</a>
+              <a href="#" onclick="handleLandlordCTA();return false;">List your house</a>
+              <a href="/dashboard" onclick="Router.go('dashboard');return false;">Landlord dashboard</a>
+              <a href="#" onclick="openModal('login-modal');return false;">Log in</a>
             </div>
           </div>
           <div class="footer-links-group">
-            <h4>Help & Support</h4>
+            <h4>Help</h4>
             <div class="footer-links">
+              <a href="https://wa.me/254703245513" target="_blank" rel="noopener"><i class="ti ti-brand-whatsapp"></i> +254 703 245 513</a>
               <a href="mailto:michaelmalaba3634@gmail.com"><i class="ti ti-mail"></i> michaelmalaba3634@gmail.com</a>
-              <a href="https://wa.me/254703245513" target="_blank"><i class="ti ti-brand-whatsapp"></i> +254 703 245 513</a>
-              <a href="#"><i class="ti ti-shield"></i> Privacy policy</a>
-              <a href="#"><i class="ti ti-file-text"></i> Terms of service</a>
             </div>
           </div>
         </div>
         <div class="footer-bottom">
-          <p>© ${new Date().getFullYear()} MyNyumba. All rights reserved. All 47 counties in Kenya covered.</p>
-          <p>For help: <a href="mailto:michaelmalaba3634@gmail.com" style="color:var(--orange)">michaelmalaba3634@gmail.com</a> · <a href="https://wa.me/254703245513" style="color:var(--green)">WhatsApp</a></p>
+          <p>© ${new Date().getFullYear()} MyNyumba</p>
+          <p><a href="#">Privacy</a> &nbsp; <a href="#">Terms</a></p>
         </div>
       </div>
     </footer>`;
@@ -178,30 +200,24 @@ const Pages = (() => {
 
   /* ── Shared: dash sidebar ── */
   function dashSidebarHTML(activePage, user) {
-    const isLandlord = user && (user.role === 'landlord' || user.role === 'admin');
+    const isLandlord = user && (user.role === 'landlord' || user.role === 'admin' || user.is_admin);
     const isAdmin    = user && user.is_admin;
+    const link = (page, icon, label, extraActive) =>
+      `<a href="${Router.pathFor(page, {})}" class="${activePage===page||extraActive?'active':''}" onclick="Router.go('${page}');return false;"><i class="ti ${icon}"></i> ${label}</a>`;
     return `<aside class="dash-sidebar">
       <div class="dash-sidebar-header">
-        <h3>${escHtml((user && user.full_name) || 'My Account')}</h3>
+        <h3>${escHtml((user && user.full_name) || 'Your account')}</h3>
         <p>${user && user.email ? escHtml(user.email) : ''}</p>
       </div>
-      <nav class="dash-nav">
+      <nav class="dash-nav" aria-label="Account">
         ${isLandlord ? `
-        <span class="nav-section-label">Landlord</span>
-        <a href="#" class="${activePage==='dashboard'?'active':''}" onclick="Router.go('dashboard');return false;"><i class="ti ti-layout-dashboard"></i> Dashboard</a>
-        <a href="#" class="${activePage==='add-listing'?'active':''}" onclick="Router.go('add-listing');return false;"><i class="ti ti-plus"></i> Add listing</a>
+        ${link('dashboard','ti-layout-dashboard','Your listings', activePage==='edit-listing')}
+        ${link('add-listing','ti-plus','Add a listing')}
         ` : ''}
-        ${isAdmin ? `
+        ${isAdmin ? `${link('admin','ti-shield','Admin')}` : ''}
+        ${link('unlocks','ti-key','Unlocked houses')}
+        ${link('profile','ti-user','Profile')}
         <hr/>
-        <span class="nav-section-label">Admin</span>
-        <a href="#" class="${activePage==='admin'?'active':''}" onclick="Router.go('admin');return false;"><i class="ti ti-shield"></i> Admin panel</a>
-        ` : ''}
-        <hr/>
-        <span class="nav-section-label">My Account</span>
-        <a href="#" class="${activePage==='unlocks'?'active':''}" onclick="Router.go('unlocks');return false;"><i class="ti ti-key"></i> My unlocked houses</a>
-        <a href="#" class="${activePage==='profile'?'active':''}" onclick="Router.go('profile');return false;"><i class="ti ti-user"></i> Profile</a>
-        <hr/>
-        <a href="#" onclick="Router.go('home');return false;"><i class="ti ti-home"></i> Back to home</a>
         <a href="#" onclick="Auth.logout();return false;" class="logout-link"><i class="ti ti-logout"></i> Log out</a>
       </nav>
     </aside>`;
@@ -211,101 +227,95 @@ const Pages = (() => {
      HOME
   ══════════════════════════════════════════════ */
   async function home() {
-    loading();
-    const [countiesR, listingsR] = await Promise.all([
-      API.counties(),
-      API.listings({ sort: 'newest', per_page: 8 })
-    ]);
-    const counties = countiesR.ok ? countiesR.data : [];
-    const listings = listingsR.ok ? listingsR.data.listings : [];
-    const total    = listingsR.ok ? listingsR.data.total : 0;
-    const topCounties = [...counties].sort((a,b) => b.listing_count - a.listing_count).slice(0, 14);
-
     app().innerHTML = `
     <section class="hero">
-      <h1>Find your next home across <em>Kenya</em></h1>
-      <p class="hero-sub">All 47 counties · Verified landlords · Pay <strong>Ksh 500</strong> to unlock contact</p>
+      <h1>Find a house to rent, anywhere in Kenya</h1>
+      <p class="hero-sub">Look through photos, rent and what's included for free. When you find the one, pay <strong>Ksh 500</strong> by M-Pesa to get the landlord's number.</p>
       ${searchBoxHTML('home')}
-      <div class="filter-tags" id="home-filters">
-        <span class="ftag active" data-filter="">All</span>
-        <span class="ftag" data-filter="water=true">Water included</span>
-        <span class="ftag" data-filter="security=true">Security</span>
-        <span class="ftag" data-filter="parking=true">Parking</span>
-        <span class="ftag" data-filter="wifi=true">WiFi</span>
-        <span class="ftag" data-filter="furnished=true">Furnished</span>
-        <span class="ftag" data-filter="dsq=true">DSQ</span>
-        <span class="ftag" data-filter="pet_friendly=true">Pet-friendly</span>
-        <span class="ftag" data-filter="gym=true">Gym</span>
+      <div class="filter-tags" id="home-filters" aria-label="Quick filters">
+        ${[['water=true','Water included'],['security=true','Security'],['parking=true','Parking'],['wifi=true','WiFi'],
+           ['furnished=true','Furnished'],['dsq=true','DSQ'],['pet_friendly=true','Pets allowed']]
+          .map(([f,l]) => `<button type="button" class="ftag" data-filter="${f}">${l}</button>`).join('')}
       </div>
-      <div class="hero-stats">
-        <div class="h-stat"><strong>${total.toLocaleString()}+</strong><span>Active listings</span></div>
-        <div class="h-stat"><strong>47</strong><span>Counties</span></div>
-        <div class="h-stat"><strong>580+</strong><span>Areas covered</span></div>
-        <div class="h-stat"><strong>Ksh 500</strong><span>Flat unlock fee</span></div>
+      <div class="hero-stats" id="hero-stats">
+        <span class="h-stat"><strong id="stat-total">&nbsp;</strong></span>
+        <span class="h-stat"><strong>47</strong> counties</span>
+        <span class="h-stat"><strong>Ksh 500</strong> per landlord contact</span>
       </div>
     </section>
 
-    <div class="counties-bar">
-      <button class="active" onclick="Router.go('counties')">All counties</button>
-      ${topCounties.map(c=>`<button onclick="Router.go('browse',{county:'${c.slug}'})">${escHtml(c.name)}</button>`).join('')}
-    </div>
-
-    <div class="section">
+    <section class="section" style="padding-top:24px">
       <div class="sec-hdr">
-        <h2>Latest listings</h2>
-        <button onclick="Router.go('browse')">View all <i class="ti ti-arrow-right"></i></button>
+        <div>
+          <h2>New this week</h2>
+          <p>The latest houses landlords have put up.</p>
+        </div>
+        <a href="/browse" onclick="Router.go('browse');return false;">See all houses</a>
       </div>
-      ${listings.length > 0
-        ? `<div class="cards-grid">${listings.map(l=>listingCard(l)).join('')}</div>`
-        : emptyState('ti-building-off','No listings yet','Be the first to post a house!','Post a listing',"Router.go('add-listing')")}
-    </div>
+      <div class="counties-bar" id="home-counties" style="padding:0;margin-bottom:28px"></div>
+      <div id="home-listings">${skeletonGrid(8)}</div>
+    </section>
 
     <section class="how-section" id="how-it-works">
-      <h2>How <span class="text-orange">MyNyumba</span> works</h2>
-      <p class="sub">Simple 3-step process to find your next home</p>
+      <h2>How MyNyumba works</h2>
+      <p class="sub">No agents and no viewing fees. You deal with the landlord directly.</p>
       <div class="steps-grid">
-        <div class="step-card"><div class="step-num">1</div><h3>Search a listing</h3><p>Browse houses by county, estate, price and amenities across all 47 counties in Kenya.</p></div>
-        <div class="step-card"><div class="step-num">2</div><h3>Pay Ksh 500 via M-Pesa</h3><p>One-time fee per listing. An STK push is sent to your phone — just enter your PIN.</p></div>
-        <div class="step-card"><div class="step-num">3</div><h3>Contact landlord directly</h3><p>Get the landlord's phone and WhatsApp. Call to arrange a viewing immediately.</p></div>
+        <div class="step-card"><div class="step-num">Step 1</div><h3>Search for free</h3><p>Filter by county, estate, rent and what's included. Every listing shows photos, the rent and the deposit up front.</p></div>
+        <div class="step-card"><div class="step-num">Step 2</div><h3>Pay Ksh 500 by M-Pesa</h3><p>Pick a house and we send an M-Pesa prompt to your phone. Enter your PIN. You pay once per house, never again for the same one.</p></div>
+        <div class="step-card"><div class="step-num">Step 3</div><h3>Call the landlord</h3><p>The landlord's phone number, WhatsApp and the exact address show up straight away, so you can book a viewing.</p></div>
       </div>
-      <span class="fee-note"><i class="ti ti-shield-check"></i> No hidden charges · M-Pesa STK Push · Instant unlock</span>
+      <span class="fee-note">No subscription. You only pay for the houses you want to see.</span>
     </section>
 
-    <div class="ll-cta">
+    <section class="ll-cta">
       <div class="ll-cta-inner">
-        <div class="ll-cta-box">
-          <div class="ll-icon"><i class="ti ti-key"></i></div>
-          <div class="ll-text">
-            <h3>Are you a landlord?</h3>
-            <p>Post your vacant house for free. Add photos, videos and a full list of services. Reach thousands of tenants across Kenya.</p>
-            <div class="ll-btns">
-              <button class="btn-primary" onclick="handleLandlordCTA()"><i class="ti ti-plus"></i> Post a listing — it's free</button>
-              <button class="btn-outline" onclick="Router.go('dashboard')"><i class="ti ti-layout-dashboard"></i> Landlord dashboard</button>
-            </div>
+        <div class="ll-text">
+          <h3>Got a house to let?</h3>
+          <p>Listing is free. Add photos, a short video and what's included, and tenants who are ready to move will call you directly.</p>
+          <div class="ll-btns">
+            <button class="btn-primary" onclick="handleLandlordCTA()">List your house</button>
+            <button class="btn-outline" onclick="Router.go('dashboard')">Go to your dashboard</button>
           </div>
         </div>
       </div>
-    </div>
+    </section>
     ${footerHTML()}`;
 
     el('home-filters').addEventListener('click', e => {
       const tag = e.target.closest('.ftag');
       if (!tag) return;
-      document.querySelectorAll('#home-filters .ftag').forEach(t => t.classList.remove('active'));
-      tag.classList.add('active');
-      const filter = tag.dataset.filter;
-      const params = filter ? Object.fromEntries([filter.split('=')]) : {};
-      Router.go('browse', params);
+      const [k, v] = tag.dataset.filter.split('=');
+      Router.go('browse', { [k]: v });
     });
-
     initSearchBox('home');
+
+    // Load data after the page shell is on screen
+    const [countiesR, listingsR] = await Promise.all([
+      API.counties(),
+      API.listings({ sort: 'newest', per_page: 8 })
+    ]);
+    if (Router.current() !== 'home' && Router.current() !== 'how') return;
+    const counties = countiesR.ok ? countiesR.data : [];
+    const listings = listingsR.ok ? listingsR.data.listings : [];
+    const total    = listingsR.ok ? listingsR.data.total : 0;
+    const topCounties = [...counties].sort((a,b) => b.listing_count - a.listing_count).slice(0, 12);
+
+    const st = el('stat-total');
+    if (st) st.parentElement.innerHTML = `<strong>${Number(total).toLocaleString()}</strong> house${total!==1?'s':''} listed`;
+    const cb = el('home-counties');
+    if (cb) cb.innerHTML = topCounties.map(c=>`<button onclick="Router.go('browse',{county:'${jsStr(c.slug)}'})">${escHtml(c.name)}</button>`).join('')
+      + `<button onclick="Router.go('counties')">All 47 counties</button>`;
+    const hl = el('home-listings');
+    if (hl) hl.innerHTML = listings.length > 0
+      ? `<div class="cards-grid">${listings.map(l=>listingCard(l)).join('')}</div>`
+      : emptyState('ti-building','No houses listed yet','Landlords are just getting started. If you have a vacant house, you can be the first.','List your house',"handleLandlordCTA()");
   }
 
   function handleLandlordCTA() {
     const user = Auth.current();
-    if (!user) { openModal('register-modal'); return; }
+    if (!user) { selectRole(document.querySelector('.role-btn[data-role="landlord"]')); openModal('register-modal'); return; }
     if (user.role !== 'landlord' && !user.is_admin) {
-      showToast('You need a landlord account to post listings.', 'info'); return;
+      showToast('Your account is set up for renting. Create a landlord account to list a house.', 'info'); return;
     }
     Router.go('add-listing');
   }
@@ -315,141 +325,144 @@ const Pages = (() => {
      BROWSE
   ══════════════════════════════════════════════ */
   async function browse(initialParams = {}) {
-    loading();
-    const countiesR = await API.counties();
-    const counties  = countiesR.ok ? countiesR.data : [];
-
     let activeCounty = initialParams.county || '';
     let activeArea   = initialParams.area_id || '';
-    let activeSort   = 'newest';
+    let activeSort   = initialParams.sort || 'newest';
     let activePage   = 1;
     let propType     = initialParams.type || '';
     let maxPrice     = initialParams.max_price || '';
     let searchQ      = initialParams.q || '';
     const amenityParams = {};
-    ['water','security','parking','wifi','furnished','dsq','gym','cctv','borehole','generator','pet_friendly'].forEach(k => {
+    ['water','security','parking','wifi','furnished','dsq','gym','cctv','borehole','generator','pet_friendly','pool'].forEach(k => {
       if (initialParams[k]) amenityParams[k] = initialParams[k];
     });
+    let reqId = 0;
 
-    let areas = [];
-    if (activeCounty) {
-      const co = counties.find(c => c.slug === activeCounty);
-      if (co) { const ar = await API.areas(co.id); if (ar.ok) areas = ar.data; }
-    }
-
-    async function fetchAndRender() {
-      const params = {
-        sort: activeSort, page: activePage, per_page: 12,
+    function currentParams() {
+      return {
         ...(searchQ      && { q: searchQ }),
         ...(activeCounty && { county: activeCounty }),
         ...(activeArea   && { area_id: activeArea }),
         ...(propType     && { type: propType }),
         ...(maxPrice     && { max_price: maxPrice }),
+        ...(activeSort !== 'newest' && { sort: activeSort }),
         ...amenityParams
       };
-      const r = await API.listings(params);
-      const data = r.ok ? r.data : { listings: [], total: 0, pages: 1 };
-      renderResults(data);
     }
 
-    function renderResults({ listings, total, pages }) {
+    function syncUrl() { history.replaceState({ route:'browse', params: currentParams() }, '', Router.pathFor('browse', currentParams())); }
+
+    app().innerHTML = `
+    <div class="browse-header">
+      <div class="browse-header-inner">
+        ${searchBoxHTML('browse', { q: searchQ, type: propType, max_price: maxPrice })}
+        <div class="counties-bar" id="browse-counties"></div>
+      </div>
+    </div>
+    <div id="area-chips-wrap"></div>
+    <div class="results-bar">
+      <div>
+        <h1 id="results-title">Houses for rent</h1>
+        <span id="results-count">&nbsp;</span>
+      </div>
+      <div class="results-controls">
+        <label class="sr-only" for="browse-sort">Sort</label>
+        <select class="sort-select" id="browse-sort" onchange="browseSort(this.value)">
+          ${[['newest','Newest first'],['price_asc','Lowest rent'],['price_desc','Highest rent'],['rating','Best rated'],['popular','Most unlocked']]
+            .map(([v,l])=>`<option value="${v}" ${activeSort===v?'selected':''}>${l}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="amenity-filters" aria-label="Filter by what's included">
+      ${AMENITY_FILTERS.map(([f,l]) => {
+        const [k] = f.split('=');
+        const on = f ? !!amenityParams[k] : Object.keys(amenityParams).length === 0;
+        return `<button type="button" class="ftag ${on?'active':''}" onclick="browseAmenity('${f}',this)">${l}</button>`;
+      }).join('')}
+    </div>
+    <div class="section browse-results">
+      <div id="results-area">${skeletonGrid(8)}</div>
+      <div id="pagination-area"></div>
+    </div>
+    ${footerHTML()}`;
+    initSearchBox('browse');
+
+    async function fetchAndRender() {
+      const my = ++reqId;
+      const ra = el('results-area');
+      if (ra && !ra.querySelector('.skel')) ra.style.opacity = '0.5';
+      const r = await API.listings({ ...currentParams(), page: activePage, per_page: 12 });
+      if (my !== reqId) return; // a newer request has started
+      if (ra) ra.style.opacity = '';
+      renderResults(r.ok ? r.data : { listings: [], total: 0, pages: 1 }, r.ok);
+    }
+
+    function renderResults({ listings, total, pages }, ok = true) {
       const rc = el('results-count');
-      if (rc) rc.textContent = `${total.toLocaleString()} listing${total !== 1 ? 's' : ''}`;
+      if (rc) rc.textContent = `${Number(total).toLocaleString()} house${total !== 1 ? 's' : ''}`;
       const ra = el('results-area');
       if (!ra) return;
       ra.innerHTML = listings.length > 0
         ? `<div class="cards-grid">${listings.map(l=>listingCard(l)).join('')}</div>`
-        : emptyState('ti-building-off','No listings found','Try adjusting your filters or search.','','');
+        : ok
+          ? emptyState('ti-search','No houses match','Try a nearby area, a higher rent limit or fewer filters.','Clear filters',"Router.go('browse')")
+          : emptyState('ti-wifi-off','Couldn\'t load houses','Check your connection and try again.','Try again',"Router.refresh()");
       const pa = el('pagination-area');
-      if (pa) {
-        if (pages <= 1) { pa.innerHTML = ''; return; }
-        let html = `<div class="pagination">
-          <button class="page-btn" ${activePage===1?'disabled':''} onclick="browseSetPage(${activePage-1})"><i class="ti ti-chevron-left"></i></button>`;
-        for (let i = 1; i <= Math.min(pages, 7); i++)
-          html += `<button class="page-btn ${i===activePage?'active':''}" onclick="browseSetPage(${i})">${i}</button>`;
-        if (pages > 7) html += `<span style="color:var(--text-3);padding:0 4px">…</span><button class="page-btn ${activePage===pages?'active':''}" onclick="browseSetPage(${pages})">${pages}</button>`;
-        html += `<button class="page-btn" ${activePage===pages?'disabled':''} onclick="browseSetPage(${activePage+1})"><i class="ti ti-chevron-right"></i></button></div>`;
-        pa.innerHTML = html;
-      }
+      if (!pa) return;
+      if (pages <= 1) { pa.innerHTML = ''; return; }
+      const nums = new Set([1, pages, activePage - 1, activePage, activePage + 1].filter(n => n >= 1 && n <= pages));
+      let html = `<nav class="pagination" aria-label="Pages">
+        <button class="page-btn" ${activePage===1?'disabled':''} onclick="browseSetPage(${activePage-1})" aria-label="Previous page"><i class="ti ti-chevron-left"></i></button>`;
+      let last = 0;
+      [...nums].sort((a,b)=>a-b).forEach(n => {
+        if (n - last > 1) html += `<span class="page-gap">…</span>`;
+        html += `<button class="page-btn ${n===activePage?'active':''}" onclick="browseSetPage(${n})" ${n===activePage?'aria-current="page"':''}>${n}</button>`;
+        last = n;
+      });
+      html += `<button class="page-btn" ${activePage===pages?'disabled':''} onclick="browseSetPage(${activePage+1})" aria-label="Next page"><i class="ti ti-chevron-right"></i></button></nav>`;
+      pa.innerHTML = html;
     }
 
-    window.browseSetPage = p => { activePage = p; fetchAndRender(); window.scrollTo(0,0); };
-    window.browseSort    = v => { activeSort = v; activePage = 1; fetchAndRender(); };
-    window.browseType    = v => { propType   = v; activePage = 1; fetchAndRender(); };
+    window.browseSetPage = p => { activePage = p; fetchAndRender(); window.scrollTo({ top: 0 }); };
+    window.browseSort    = v => { activeSort = v; activePage = 1; syncUrl(); fetchAndRender(); };
     window.browseAmenity = (filter, tagEl) => {
       document.querySelectorAll('.amenity-filters .ftag').forEach(t => t.classList.remove('active'));
       tagEl.classList.add('active');
       Object.keys(amenityParams).forEach(k => delete amenityParams[k]);
       if (filter) { const [k,v] = filter.split('='); amenityParams[k] = v; }
-      activePage = 1; fetchAndRender();
+      activePage = 1; syncUrl(); fetchAndRender();
     };
-    window.browseSetCounty = async (slug, cid) => {
-      activeCounty = slug; activeArea = ''; activePage = 1; areas = [];
-      if (slug && cid) { const ar = await API.areas(cid); if (ar.ok) areas = ar.data; }
-      browse({ county: slug, q: searchQ, type: propType, ...amenityParams });
+    window.browseSetCounty = slug => {
+      Router.go('browse', { ...currentParams(), county: slug || undefined, area_id: undefined, ...(slug ? {} : {}) });
     };
     window.browseSetArea = areaId => {
       activeArea = areaId; activePage = 1;
-      document.querySelectorAll('#area-chips .area-chip').forEach(c =>
-        c.classList.toggle('active', c.dataset.areaId == areaId || (areaId==='' && c.dataset.areaId==='')));
-      fetchAndRender();
+      document.querySelectorAll('#area-chips .area-chip').forEach(c => c.classList.toggle('active', String(c.dataset.areaId) === String(areaId)));
+      syncUrl(); fetchAndRender();
     };
 
-    const areasHTML = areas.length > 0
-      ? `<div class="area-chips" id="area-chips">
-          <span class="area-chip ${!activeArea?'active':''}" data-area-id="" onclick="browseSetArea('')">All areas</span>
-          ${areas.map(a=>`<span class="area-chip ${activeArea==a.id?'active':''}" data-area-id="${a.id}" onclick="browseSetArea('${a.id}')">${escHtml(a.name)}</span>`).join('')}
-        </div>` : '';
-
-    app().innerHTML = `
-    <div class="browse-header">
-      <div class="browse-header-inner">
-        <div style="margin-bottom:10px">${searchBoxHTML('browse')}</div>
-        <div class="counties-bar" style="padding:0;margin:0;background:transparent;border:none">
-          <button class="${!activeCounty?'active':''}" onclick="browseSetCounty('','')">All</button>
-          ${counties.map(c=>`<button class="${activeCounty===c.slug?'active':''}" onclick="browseSetCounty('${c.slug}','${c.id}')">${escHtml(c.name)}</button>`).join('')}
-        </div>
-      </div>
-    </div>
-    ${areasHTML}
-    <div class="results-bar" style="max-width:100%">
-      <span id="results-count">Loading…</span>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <select class="sort-select" onchange="browseSort(this.value)">
-          <option value="newest">Newest first</option>
-          <option value="price_asc">Price: low to high</option>
-          <option value="price_desc">Price: high to low</option>
-          <option value="rating">Top rated</option>
-          <option value="popular">Most unlocked</option>
-        </select>
-        <select class="sort-select" onchange="browseType(this.value)" style="min-width:130px">
-          <option value="">All types</option>
-          <option value="bedsitter">Bedsitter</option>
-          <option value="studio">Studio</option>
-          <option value="1_bedroom">1 Bedroom</option>
-          <option value="2_bedroom">2 Bedroom</option>
-          <option value="3_bedroom">3 Bedroom</option>
-          <option value="4_bedroom">4 Bedroom</option>
-          <option value="bungalow">Bungalow</option>
-          <option value="maisonette">Maisonette</option>
-        </select>
-      </div>
-    </div>
-    <div class="amenity-filters">
-      ${[['','All'],['water=true','Water'],['parking=true','Parking'],['wifi=true','WiFi'],
-         ['security=true','Security'],['furnished=true','Furnished'],['dsq=true','DSQ'],
-         ['gym=true','Gym'],['cctv=true','CCTV'],['borehole=true','Borehole'],
-         ['generator=true','Generator'],['pet_friendly=true','Pet-friendly'],['pool=true','Pool']]
-        .map(([f,l])=>`<span class="ftag ${Object.keys(amenityParams).length===0&&!f?'active':''}" onclick="browseAmenity('${f}',this)">${l}</span>`).join('')}
-    </div>
-    <div class="section" style="padding-top:16px">
-      <div id="results-area"><div class="loading-state"><div class="spinner"></div><span>Loading…</span></div></div>
-      <div id="pagination-area"></div>
-    </div>
-    ${footerHTML()}`;
-
-    initSearchBox('browse');
+    // Listings and counties load in parallel
     fetchAndRender();
+    const countiesR = await API.counties();
+    const counties  = countiesR.ok ? countiesR.data : [];
+    const co = counties.find(c => c.slug === activeCounty);
+    const title = el('results-title');
+    if (title) title.textContent = co ? `Houses in ${co.name}` : (searchQ ? `Houses matching “${searchQ}”` : 'Houses for rent');
+    const cb = el('browse-counties');
+    if (cb) cb.innerHTML = `<button class="${!activeCounty?'active':''}" onclick="browseSetCounty('')">All counties</button>` +
+      [...counties].sort((a,b) => b.listing_count - a.listing_count || a.name.localeCompare(b.name))
+        .map(c=>`<button class="${activeCounty===c.slug?'active':''}" onclick="browseSetCounty('${jsStr(c.slug)}')">${escHtml(c.name)}</button>`).join('');
+    const activeBtn = cb && cb.querySelector('button.active');
+    if (activeBtn && activeCounty) activeBtn.scrollIntoView({ block: 'nearest', inline: 'center' });
+    if (co) {
+      const ar = await API.areas(co.id);
+      const areas = ar.ok ? ar.data : [];
+      const wrap = el('area-chips-wrap');
+      if (wrap && areas.length) wrap.innerHTML = `<div class="area-chips" id="area-chips">
+          <button type="button" class="area-chip ${!activeArea?'active':''}" data-area-id="" onclick="browseSetArea('')">All of ${escHtml(co.name)}</button>
+          ${areas.map(a=>`<button type="button" class="area-chip ${String(activeArea)===String(a.id)?'active':''}" data-area-id="${escHtml(a.id)}" onclick="browseSetArea('${jsStr(a.id)}')">${escHtml(a.name)}</button>`).join('')}
+        </div>`;
+    }
   }
 
   /* ══════════════════════════════════════════════
@@ -458,36 +471,30 @@ const Pages = (() => {
   async function counties() {
     loading();
     const r = await API.counties();
-    if (!r.ok) { app().innerHTML = emptyState('ti-alert-circle','Failed to load','Could not load counties.','Retry',"Pages.counties()"); return; }
+    if (!r.ok) { app().innerHTML = emptyState('ti-wifi-off','Couldn\'t load counties','Check your connection and try again.','Try again',"Pages.counties()"); return; }
     const all = r.data;
     const byRegion = {};
     all.forEach(c => { if (!byRegion[c.region]) byRegion[c.region] = []; byRegion[c.region].push(c); });
-    const regionIcons = {
-      'Nairobi Region':'ti-building-skyscraper','Central':'ti-mountain','Coast':'ti-waves',
-      'Rift Valley':'ti-mountain-off','Western':'ti-tree','Nyanza':'ti-ripple',
-      'Eastern':'ti-map','North Eastern':'ti-map-2'
-    };
     app().innerHTML = `
-    <div class="hero" style="padding:32px 20px 24px">
-      <h1>All <em>47 counties</em> in Kenya</h1>
-      <p class="hero-sub">Select a county to browse listings in that area</p>
+    <section class="hero hero-compact">
+      <h1>Houses by county</h1>
+      <p class="hero-sub">Pick a county to see what's available, or search for an estate or town.</p>
       ${searchBoxHTML('counties')}
-      <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:14px">
-        <span class="ftag active" onclick="filterRegion('',this)">All regions</span>
-        ${Object.keys(byRegion).map(reg=>`<span class="ftag" onclick="filterRegion('${escHtml(reg)}',this)">${reg}</span>`).join('')}
+      <div class="filter-tags" id="region-filters">
+        <button type="button" class="ftag active" onclick="filterRegion('',this)">All regions</button>
+        ${Object.keys(byRegion).map(reg=>`<button type="button" class="ftag" onclick="filterRegion('${jsStr(reg)}',this)">${escHtml(reg)}</button>`).join('')}
       </div>
-    </div>
-    <div style="max-width:1280px;margin:0 auto;padding:24px 20px" id="counties-page">
+    </section>
+    <div class="section" style="padding-top:24px" id="counties-page">
       ${Object.entries(byRegion).map(([region, cs]) => `
-        <div class="region-section" data-region="${escHtml(region)}" style="margin-bottom:28px">
-          <h3 style="font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px">${region}</h3>
+        <div class="region-section" data-region="${escHtml(region)}">
+          <h2 class="region-title">${escHtml(region)}</h2>
           <div class="county-grid">
             ${cs.map(c=>`
-              <div class="county-card" onclick="Router.go('browse',{county:'${c.slug}'})">
-                <i class="ti ${regionIcons[region]||'ti-map-pin'}"></i>
+              <a href="/browse?county=${encodeURIComponent(c.slug)}" class="county-card ${c.listing_count>0?'':'is-empty'}" onclick="Router.go('browse',{county:'${jsStr(c.slug)}'});return false;">
                 <h3>${escHtml(c.name)}</h3>
-                <p>${c.listing_count > 0 ? c.listing_count+' listing'+(c.listing_count!==1?'s':'') : 'Coming soon'}</p>
-              </div>`).join('')}
+                <p>${c.listing_count > 0 ? c.listing_count+' house'+(c.listing_count!=1?'s':'') : 'None yet'}</p>
+              </a>`).join('')}
           </div>
         </div>`).join('')}
     </div>
@@ -495,7 +502,7 @@ const Pages = (() => {
 
     initSearchBox('counties');
     window.filterRegion = (region, btn) => {
-      document.querySelectorAll('.hero .ftag').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('#region-filters .ftag').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
       document.querySelectorAll('.region-section').forEach(s => {
         s.style.display = (!region || s.dataset.region === region) ? '' : 'none';
@@ -513,7 +520,7 @@ const Pages = (() => {
       API.listing(id),
       Auth.current() ? API.unlockStatus(id) : Promise.resolve({ ok:true, data:{ status:'not_unlocked' } })
     ]);
-    if (!r.ok) { app().innerHTML = emptyState('ti-building-off','Listing not found','This listing may have been removed.','Browse listings',"Router.go('browse')"); return; }
+    if (!r.ok) { app().innerHTML = emptyState('ti-building','This house isn\'t available','The landlord may have taken it down or it has been let.','Browse other houses',"Router.go('browse')") + footerHTML(); return; }
 
     const l          = r.data.listing;
     const media      = r.data.media || [];
@@ -522,127 +529,163 @@ const Pages = (() => {
     const ld         = isUnlocked ? unlockR.data : null;
     const photos     = media.filter(m => m.media_type === 'photo');
     const videos     = media.filter(m => m.media_type === 'video');
+    const slides     = photos.concat(videos);
 
-    const galleryMain = photos.length > 0
-      ? `<img src="${photos[0].url}" alt="${escHtml(l.title)}" id="gallery-main-img"/>`
-      : `<i class="ti ti-building placeholder-icon"></i>`;
+    // Gallery: up to five cells, the rest behind "Show all"
+    const cells = slides.slice(0, 5);
+    const galleryHtml = cells.length
+      ? `<div class="gallery count-${Math.min(cells.length,5)}" style="position:relative">
+          ${cells.map((m, i) => `<button type="button" class="gallery-cell" onclick="openLightbox(${i})" aria-label="${m.media_type==='video'?'Play video':'View photo '+(i+1)}">
+              ${m.media_type === 'video'
+                ? `<video src="${escHtml(m.url)}#t=0.5" muted playsinline preload="metadata"></video><span class="video-indicator"><i class="ti ti-player-play-filled"></i></span>`
+                : `<img src="${escHtml(m.url)}" alt="" ${i===0?'fetchpriority="high"':'loading="lazy"'} decoding="async"/>`}
+            </button>`).join('')}
+          ${slides.length > 1 ? `<button type="button" class="gallery-all" onclick="openLightbox(0)"><i class="ti ti-photo"></i> ${photos.length} photo${photos.length!==1?'s':''}${videos.length?` and ${videos.length} video${videos.length!==1?'s':''}`:''}</button>` : ''}
+        </div>`
+      : `<div class="gallery-empty"><i class="ti ti-photo"></i><span>The landlord hasn't added photos yet</span></div>`;
 
-    const thumbs = [
-      ...photos.map((p,i) => `<div class="gallery-thumb ${i===0?'active':''}" onclick="setGalleryImg('${p.url}',this)"><img src="${p.url}" alt="Photo ${i+1}" loading="lazy"/></div>`),
-      ...videos.map(v => `<div class="gallery-thumb" onclick="setGalleryVideo('${v.url}',this)"><i class="ti ti-photo" style="color:var(--surface-3)"></i><div class="video-indicator"><i class="ti ti-player-play-filled"></i></div></div>`)
-    ].join('');
+    const included = AMENITIES.filter(([k]) => l[k]);
+    const missing  = AMENITIES.filter(([k]) => !l[k]);
+    const nearby   = NEARBY.filter(([k]) => l[k]);
+    const facts = [
+      ['House type', typeLabel(l.property_type)],
+      l.floor ? ['Floor', `${escHtml(l.floor)} floor`] : null,
+      ['Deposit', `${formatPrice(l.monthly_rent * l.deposit_months)} (${l.deposit_months} month${l.deposit_months>1?'s':''})`],
+      ['Listed', timeAgo(l.created_at)],
+    ].filter(Boolean);
 
-    const amenities = [
-      ['has_water','Running water'],['has_borehole','Borehole water'],
-      ['has_security','24hr security'],['has_cctv','CCTV cameras'],
-      ['has_parking','Vehicle parking'],['has_wifi','WiFi included'],
-      ['has_electricity_token','Electricity (token)'],['has_generator','Backup generator'],
-      ['is_furnished','Furnished'],['has_dsq','DSQ'],
-      ['has_garbage','Garbage collection'],['has_caretaker','Caretaker on-site'],
-      ['has_gym','Gym'],['has_pool','Swimming pool'],
-      ['has_playground','Children playground'],['is_pet_friendly','Pet-friendly'],
-      ['has_balcony','Balcony'],['has_lift','Lift / elevator'],
-    ];
-    const nearby = [
-      ['near_school','ti-school','Schools'],['near_hospital','ti-building-hospital','Hospital'],
-      ['near_market','ti-shopping-cart','Market'],['near_matatu','ti-bus','Matatu stage'],
-      ['near_church','ti-church','Place of worship'],['near_water_kiosk','ti-droplet','Water kiosk'],
-    ].filter(([k]) => l[k]);
-
-    const sidebarContact = isUnlocked && ld ? `
+    const address = (ld && ld.street_address) || '';
+    const phoneDigits = ld ? String(ld.landlord_phone||'').replace(/\D/g,'').replace(/^0/, '254') : '';
+    const contactHtml = isUnlocked && ld ? `
       <div class="contact-reveal-panel">
-        <h3><i class="ti ti-user-check"></i> Landlord contact</h3>
-        <div class="contact-row"><i class="ti ti-user"></i><div><strong>${escHtml(ld.landlord_name||'Landlord')}</strong><small>Verified landlord</small></div></div>
-        <div class="contact-row"><i class="ti ti-phone"></i><div><strong>${escHtml(ld.landlord_phone||'N/A')}</strong><small>Call directly</small></div></div>
-        <div class="contact-row"><i class="ti ti-brand-whatsapp"></i><div><strong>${escHtml(ld.landlord_phone||'N/A')}</strong><small>WhatsApp</small></div></div>
-        ${ld.landlord_email ? `<div class="contact-row"><i class="ti ti-mail"></i><div><strong>${escHtml(ld.landlord_email)}</strong><small>Email</small></div></div>` : ''}
-        <button class="btn-whatsapp" onclick="window.open('https://wa.me/${(ld.landlord_phone||'').replace(/\D/g,'')}','_blank')"><i class="ti ti-brand-whatsapp"></i> Open WhatsApp chat</button>
-        <button class="btn-ghost btn-block mt-12" onclick="Reviews.open('${l.id}')"><i class="ti ti-star"></i> Leave a review</button>
+        <h3><i class="ti ti-circle-check"></i> You've unlocked this house</h3>
+        <div class="contact-row"><i class="ti ti-user"></i><div><strong>${escHtml(ld.landlord_name||'Landlord')}</strong><small>Landlord</small></div></div>
+        <div class="contact-row"><i class="ti ti-phone"></i><div><strong><a href="tel:${escHtml(ld.landlord_phone||'')}">${escHtml(ld.landlord_phone||'Not given')}</a></strong><small>Call or SMS</small></div></div>
+        ${ld.landlord_email ? `<div class="contact-row"><i class="ti ti-mail"></i><div><strong><a href="mailto:${escHtml(ld.landlord_email)}">${escHtml(ld.landlord_email)}</a></strong><small>Email</small></div></div>` : ''}
+        ${address ? `<div class="contact-row"><i class="ti ti-map-pin"></i><div><strong>${escHtml(address)}</strong><small>Address</small></div></div>` : ''}
+        ${phoneDigits ? `<a class="btn-whatsapp" href="https://wa.me/${phoneDigits}" target="_blank" rel="noopener"><i class="ti ti-brand-whatsapp"></i> Message on WhatsApp</a>` : ''}
+        <button class="btn-ghost btn-block mt-12" onclick="Reviews.open('${jsStr(l.id)}')">Review this house</button>
       </div>` : `
       <div class="contact-lock-panel">
-        <div class="lock-icon"><i class="ti ti-lock"></i></div>
-        <p>Landlord contact is hidden. Pay <strong style="color:var(--orange)">Ksh 500</strong> via M-Pesa to reveal phone and WhatsApp.</p>
-        <button class="btn-primary btn-block" onclick="Unlock.open('${l.id}','${escHtml(l.title)}')"><i class="ti ti-device-mobile-dollar"></i> Unlock — Ksh 500</button>
+        <button class="btn-primary btn-block" onclick="Unlock.open('${jsStr(l.id)}','${jsStr(l.title)}')">Get landlord's number</button>
+        <p class="book-note">Ksh 500, paid once by M-Pesa. You get their phone, WhatsApp and the exact address.</p>
       </div>`;
 
     app().innerHTML = `
-    <div class="crumb">
-      <span onclick="Router.go('home')">Home</span>
-      <i class="ti ti-chevron-right" style="font-size:11px;color:var(--text-3)"></i>
-      <span onclick="Router.go('browse',{county:'${l.county_slug}'})"> ${escHtml(l.county_name)}</span>
-      ${l.area_name ? `<i class="ti ti-chevron-right" style="font-size:11px;color:var(--text-3)"></i><span onclick="Router.go('browse',{county:'${l.county_slug}',area_id:'${l.area_id}'})">${escHtml(l.area_name)}</span>` : ''}
-      <i class="ti ti-chevron-right" style="font-size:11px;color:var(--text-3)"></i>
-      <span style="color:var(--text-2);cursor:default">${typeLabel(l.property_type)}</span>
-    </div>
-    <div style="max-width:1280px;margin:0 auto">
+    <nav class="crumb" aria-label="Breadcrumb">
+      <span onclick="Router.go('browse',{county:'${jsStr(l.county_slug)}'})">${escHtml(l.county_name)}</span>
+      ${l.area_name ? `<i class="ti ti-chevron-right"></i><span onclick="Router.go('browse',{county:'${jsStr(l.county_slug)}',area_id:'${jsStr(l.area_id)}'})">${escHtml(l.area_name)}</span>` : ''}
+      <i class="ti ti-chevron-right"></i>
+      <span class="crumb-current">${typeLabel(l.property_type)}</span>
+    </nav>
+    <div class="detail-page">
+      <div class="detail-head">
+        <h1 class="detail-title">${escHtml(l.title)}</h1>
+        <div class="detail-loc">
+          ${l.review_count > 0 ? `<span class="detail-rating">${starsHtml(l.average_rating, l.review_count)}</span><span aria-hidden="true">&nbsp;/&nbsp;</span>` : ''}
+          <span>${placeLine(l.area_name, l.county_name)}</span>
+        </div>
+      </div>
+      ${galleryHtml}
       <div class="detail-layout">
         <div class="detail-main">
-          <div class="media-gallery">
-            <div class="gallery-main" id="gallery-main">${galleryMain}</div>
-            ${thumbs ? `<div class="gallery-thumbs">${thumbs}</div>` : ''}
-          </div>
-          <h1 class="detail-title">${escHtml(l.title)}</h1>
-          <div class="detail-loc"><i class="ti ti-map-pin"></i>${l.street_address?escHtml(l.street_address)+' · ':''}${l.area_name?escHtml(l.area_name)+' · ':''}${escHtml(l.county_name)}</div>
-          <div class="detail-tags">
-            <span class="dtag">${typeLabel(l.property_type)}</span>
-            ${l.floor?`<span class="dtag">${escHtml(l.floor)} floor</span>`:''}
-            <span class="dtag green">Available now</span>
-            <span class="dtag">${l.views} views</span>
-          </div>
-          <div class="detail-price">${formatPrice(l.monthly_rent)} <small>/month</small></div>
-          <div class="deposit-note">Deposit: ${formatPrice(l.monthly_rent * l.deposit_months)} (${l.deposit_months} months)</div>
-          ${l.review_count > 0 ? `<div class="detail-rating">${starsHtml(l.average_rating, l.review_count)}</div>` : ''}
-
-          ${l.description?`<div class="panel" style="margin-top:16px"><div class="panel-title"><i class="ti ti-info-circle"></i> About this property</div><p style="font-size:13px;color:var(--text-2);line-height:1.7">${escHtml(l.description)}</p></div>`:''}
-
-          <div class="panel">
-            <div class="panel-title"><i class="ti ti-list-check"></i> Amenities & services</div>
-            <div class="amenity-grid">
-              ${amenities.map(([k,label])=>`<div class="amenity-item"><i class="ti ${l[k]?'ti-check yes':'ti-x no'}"></i><span>${label}</span></div>`).join('')}
+          <div class="detail-summary">
+            <h2>${typeLabel(l.property_type)} in ${escHtml(l.area_name || l.county_name)}</h2>
+            <div class="detail-tags">
+              <span class="dtag green">Available now</span>
+              ${l.floor ? `<span class="dtag">${escHtml(l.floor)} floor</span>` : ''}
+              <span class="dtag">${Number(l.views||0).toLocaleString()} views</span>
             </div>
           </div>
 
-          ${nearby.length>0?`<div class="panel"><div class="panel-title"><i class="ti ti-map-2"></i> Nearby services</div><div class="nearby-grid">${nearby.map(([,icon,label])=>`<div class="nearby-item"><i class="ti ${icon}"></i><span>${label}</span></div>`).join('')}</div></div>`:''}
+          ${l.description ? `<section class="detail-block"><h2>About this house</h2><p class="prose">${escHtml(l.description)}</p></section>` : ''}
 
-          <div class="panel"><div class="panel-title"><i class="ti ti-map"></i> Location</div><div class="map-box"><i class="ti ti-map-pin"></i><span>${l.area_name?escHtml(l.area_name)+', ':''} ${escHtml(l.county_name)}</span></div><p style="font-size:11px;color:var(--text-3);margin-top:6px">Exact address revealed after unlocking contact.</p></div>
+          <section class="detail-block">
+            <h2>What's included</h2>
+            ${included.length
+              ? `<div class="amenity-grid">${included.map(([,label,icon])=>`<div class="amenity-item"><i class="ti ${icon}"></i><span>${label}</span></div>`).join('')}</div>`
+              : `<p class="text-muted">The landlord hasn't listed any amenities.</p>`}
+            ${included.length && missing.length ? `<p class="text-muted mt-16" style="font-size:15px">Not included: ${missing.map(([,label])=>label.toLowerCase()).join(', ')}.</p>` : ''}
+          </section>
 
-          <div class="panel">
-            <div class="panel-title"><i class="ti ti-star"></i> Reviews (${l.review_count})</div>
+          ${nearby.length ? `<section class="detail-block"><h2>Nearby</h2><div class="nearby-grid">${nearby.map(([,label,icon])=>`<div class="nearby-item"><i class="ti ${icon}"></i><span>${label}</span></div>`).join('')}</div></section>` : ''}
+
+          <section class="detail-block">
+            <h2>Where it is</h2>
+            <div class="map-box"><i class="ti ti-map-pin"></i><span>${placeLine(l.area_name, l.county_name)}</span><small>${isUnlocked ? (address ? escHtml(address) : 'Ask the landlord for directions.') : 'You get the exact address with the landlord\'s number.'}</small></div>
+          </section>
+
+          <section class="detail-block">
+            <h2>${l.review_count > 0 ? `${starsHtml(l.average_rating, l.review_count)}` : 'Reviews'}</h2>
             ${reviews.length > 0
-              ? reviews.map(rv=>`<div class="review-card"><div class="review-header"><span class="reviewer-name">${escHtml(rv.reviewer_name||'Tenant')}</span><span class="review-stars">${'★'.repeat(rv.rating)}${'☆'.repeat(5-rv.rating)}</span></div><div class="review-date">${timeAgo(rv.created_at)}</div>${rv.comment?`<div class="review-comment">${escHtml(rv.comment)}</div>`:''}</div>`).join('')
-              : `<p style="font-size:13px;color:var(--text-3)">No reviews yet. Unlock this listing and be the first to review!</p>`}
-          </div>
+              ? `<div class="review-list">${reviews.map(rv=>`<div class="review-card">
+                  <div class="review-header"><span class="review-avatar">${escHtml((rv.reviewer_name||'T').charAt(0).toUpperCase())}</span>
+                    <div><span class="reviewer-name">${escHtml(rv.reviewer_name||'Tenant')}</span><span class="review-date">${'★'.repeat(rv.rating)}${'☆'.repeat(5-rv.rating)} &nbsp;${timeAgo(rv.created_at)}</span></div></div>
+                  ${rv.comment?`<p class="review-comment">${escHtml(rv.comment)}</p>`:''}
+                </div>`).join('')}</div>`
+              : `<p class="text-muted">No reviews yet. Only tenants who unlocked this house can review it.</p>`}
+          </section>
         </div>
-        <div class="detail-sidebar">
-          ${sidebarContact}
-          <div class="panel">
-            <div style="font-size:12px;color:var(--text-2)">
-              ${[['Property type',typeLabel(l.property_type)],['Monthly rent',`<span class="text-orange">${formatPrice(l.monthly_rent)}</span>`],['Deposit',`${l.deposit_months} month${l.deposit_months>1?'s':''}`],['County',escHtml(l.county_name)],l.area_name?['Area',escHtml(l.area_name)]:null,['Listed',timeAgo(l.created_at)]].filter(Boolean).map(([k,v])=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)"><span>${k}</span><strong>${v}</strong></div>`).join('')}
-            </div>
+        <aside class="detail-sidebar">
+          <div class="book-card">
+            <div class="detail-price">${formatPrice(l.monthly_rent)} <small>a month</small></div>
+            <div class="book-facts">${facts.map(([k,v])=>`<div><span>${k}</span><strong>${v}</strong></div>`).join('')}</div>
+            ${contactHtml}
           </div>
-          <button class="btn-ghost btn-block mt-8" onclick="Router.go('browse',{county:'${l.county_slug}'})"><i class="ti ti-arrow-left"></i> More in ${escHtml(l.county_name)}</button>
-        </div>
+          <button class="btn-text btn-block mt-12" onclick="Router.go('browse',{county:'${jsStr(l.county_slug)}'})">More houses in ${escHtml(l.county_name)}</button>
+        </aside>
       </div>
     </div>
     ${footerHTML()}`;
 
-    window.setGalleryImg   = (url, thumb) => { el('gallery-main').innerHTML = `<img src="${url}" alt="Photo" id="gallery-main-img"/>`; document.querySelectorAll('.gallery-thumb').forEach(t=>t.classList.remove('active')); thumb.classList.add('active'); };
-    window.setGalleryVideo = (url, thumb) => { el('gallery-main').innerHTML = `<video src="${url}" controls style="width:100%;height:100%;object-fit:cover"></video>`; document.querySelectorAll('.gallery-thumb').forEach(t=>t.classList.remove('active')); thumb.classList.add('active'); };
+    /* Full-screen viewer for photos and video */
+    window.openLightbox = (start) => {
+      if (!slides.length) return;
+      let i = start || 0;
+      const box = document.createElement('div');
+      box.className = 'lightbox'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
+      document.body.appendChild(box); document.body.style.overflow = 'hidden';
+      function show() {
+        const m = slides[i];
+        box.innerHTML = `<div class="lightbox-bar"><button class="btn-text" data-act="close"><i class="ti ti-x"></i> Close</button><span>${i+1} / ${slides.length}</span><span style="width:80px"></span></div>
+          <div class="lightbox-stage">
+            ${m.media_type === 'video' ? `<video src="${escHtml(m.url)}" controls autoplay playsinline></video>` : `<img src="${escHtml(m.url)}" alt="Photo ${i+1} of ${slides.length}"/>`}
+            ${slides.length > 1 ? `<button class="lightbox-nav prev" data-act="prev" aria-label="Previous"><i class="ti ti-chevron-left"></i></button><button class="lightbox-nav next" data-act="next" aria-label="Next"><i class="ti ti-chevron-right"></i></button>` : ''}
+          </div>`;
+      }
+      function close() { box.remove(); document.body.style.overflow = ''; document.removeEventListener('keydown', key); }
+      function step(d) { i = (i + d + slides.length) % slides.length; show(); }
+      function key(e) { if (e.key === 'Escape') close(); if (e.key === 'ArrowRight') step(1); if (e.key === 'ArrowLeft') step(-1); }
+      box.addEventListener('click', e => {
+        const a = e.target.closest('[data-act]'); if (!a) return;
+        if (a.dataset.act === 'close') close(); else step(a.dataset.act === 'next' ? 1 : -1);
+      });
+      let x0 = null;
+      box.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; }, { passive: true });
+      box.addEventListener('touchend', e => { if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0; if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1); x0 = null; });
+      document.addEventListener('keydown', key);
+      show();
+    };
   }
 
   /* ══════════════════════════════════════════════
      LANDLORD DASHBOARD
   ══════════════════════════════════════════════ */
-  async function dashboard() {
+  function requireLandlord() {
     const user = Auth.current();
-    if (!user) { openModal('login-modal'); return; }
+    if (!user) { openModal('login-modal'); app().innerHTML = emptyState('ti-lock','Log in to see your listings','Your dashboard shows your houses, views and how many tenants unlocked each one.','Log in',"openModal('login-modal')"); return null; }
     if (user.role !== 'landlord' && !user.is_admin) {
-      app().innerHTML = emptyState('ti-lock','Landlord account required','Register as a landlord to access the dashboard.','Sign up as landlord',"openModal('register-modal')");
-      return;
+      app().innerHTML = emptyState('ti-key','This area is for landlords','Your account is set up for renting. To list a house, create a separate landlord account.','Create landlord account',"selectRole(document.querySelector('.role-btn[data-role=landlord]'));openModal('register-modal')");
+      return null;
     }
+    return user;
+  }
+
+  async function dashboard() {
+    const user = requireLandlord(); if (!user) return;
     loading();
     const r = await API.landlordListings();
-    if (!r.ok) { app().innerHTML = emptyState('ti-alert-circle','Error',r.data.error||'Failed to load.','Retry',"Router.go('dashboard')"); return; }
+    if (!r.ok) { app().innerHTML = emptyState('ti-alert-circle','Couldn\'t load your listings',r.data.error||'Check your connection and try again.','Try again',"Router.go('dashboard')"); return; }
     const { listings, stats } = r.data;
     const s = stats || {};
 
@@ -651,174 +694,200 @@ const Pages = (() => {
       ${dashSidebarHTML('dashboard', user)}
       <div class="dash-content">
         <div class="dash-header-section">
-          <h2>Welcome, ${escHtml((user.full_name||'').split(' ')[0])}</h2>
-          <p>Manage your listings and track performance</p>
+          <div>
+            <h2>Your listings</h2>
+            <p>Hi ${escHtml((user.full_name||'').split(' ')[0] || 'there')}. Here's how your houses are doing.</p>
+          </div>
+          <button class="btn-primary" onclick="Router.go('add-listing')"><i class="ti ti-plus"></i> Add a listing</button>
         </div>
         <div class="metrics-row">
-          <div class="metric-card"><strong>${s.active||0}</strong><span>Active listings</span></div>
-          <div class="metric-card"><strong>${s.pending||0}</strong><span>Pending</span></div>
-          <div class="metric-card"><strong>${Number(s.total_views||0).toLocaleString()}</strong><span>Total views</span></div>
-          <div class="metric-card"><strong>${Number(s.total_unlocks||0).toLocaleString()}</strong><span>Unlocks</span></div>
+          <div class="metric-card"><strong>${s.active||0}</strong><span>Live</span></div>
+          <div class="metric-card"><strong>${s.pending||0}</strong><span>Waiting for review</span></div>
+          <div class="metric-card"><strong>${Number(s.total_views||0).toLocaleString()}</strong><span>Views</span></div>
+          <div class="metric-card"><strong>${Number(s.total_unlocks||0).toLocaleString()}</strong><span>Tenants who unlocked</span></div>
         </div>
-        <button class="btn-primary btn-block" style="margin-bottom:20px" onclick="Router.go('add-listing')"><i class="ti ti-plus"></i> Add new listing</button>
-        <div class="panel">
-          <div class="panel-title"><i class="ti ti-list"></i> My listings</div>
-          ${listings.length === 0
-            ? `<p style="font-size:13px;color:var(--text-3);text-align:center;padding:20px 0">No listings yet. Add your first one above!</p>`
-            : listings.map(l=>`
-              <div class="listing-row">
-                <div class="lr-thumb"><i class="ti ti-building"></i></div>
-                <div class="lr-info">
-                  <h4>${escHtml(l.title)}</h4>
-                  <p>${escHtml(l.county_name)}${l.area_name?' · '+escHtml(l.area_name):''} · ${formatPrice(l.monthly_rent)}/mo · ${l.photo_count||0} photo${l.photo_count!==1?'s':''}</p>
-                </div>
-                <span class="status-badge status-${l.status}">${l.status.charAt(0).toUpperCase()+l.status.slice(1)}</span>
-                <div class="lr-actions">
-                  <button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${l.id}'})"><i class="ti ti-eye"></i> View</button>
-                  <button class="btn-ghost btn-xs" onclick="Router.go('edit-listing',{id:'${l.id}'})"><i class="ti ti-edit"></i> Edit</button>
-                  <button class="btn-danger btn-xs" onclick="confirmDeleteListing('${l.id}')"><i class="ti ti-trash"></i> Delete</button>
-                </div>
-              </div>`).join('')}
-        </div>
+        <div class="list-head"><h3>All houses</h3><span>${listings.length} listing${listings.length!==1?'s':''}</span></div>
+        ${listings.length === 0
+          ? emptyState('ti-home','You haven\'t listed a house yet','It takes about five minutes. Have a few photos of the house ready.','Add your first listing',"Router.go('add-listing')")
+          : listings.map(l=>`
+            <div class="listing-row">
+              <div class="lr-thumb">${l.cover_photo ? `<img src="${escHtml(l.cover_photo)}" alt="" loading="lazy"/>` : '<i class="ti ti-photo"></i>'}</div>
+              <div class="lr-info">
+                <h4>${escHtml(l.title)}</h4>
+                <p>${placeLine(l.area_name, l.county_name)}, ${formatPrice(l.monthly_rent)} a month</p>
+                <p>${Number(l.views||0).toLocaleString()} views, ${l.unlock_count||0} unlocks, ${l.photo_count||0} photo${l.photo_count!=1?'s':''}</p>
+              </div>
+              <span class="status-badge status-${escHtml(l.status)}">${({active:'Live',pending:'In review',inactive:'Hidden'})[l.status]||escHtml(l.status)}</span>
+              <div class="lr-actions">
+                <button class="btn-ghost btn-xs" onclick="Router.go('edit-listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-edit"></i> Edit</button>
+                ${l.status==='active' ? `<button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> View</button>` : ''}
+                <button class="btn-danger btn-xs" onclick="confirmDeleteListing('${jsStr(l.id)}','${jsStr(l.title)}')" aria-label="Delete ${escHtml(l.title)}"><i class="ti ti-trash"></i></button>
+              </div>
+            </div>`).join('')}
       </div>
     </div>`;
 
-    window.confirmDeleteListing = async id => {
-      if (!confirm('Delete this listing? This cannot be undone.')) return;
+    window.confirmDeleteListing = async (id, title) => {
+      if (!confirm(`Delete "${title}"? Its photos and reviews go too. You can't undo this.`)) return;
       const r = await API.deleteListing(id);
       if (r.ok) { showToast('Listing deleted.','success'); Router.go('dashboard'); }
-      else showToast(r.data.error||'Delete failed.','error');
+      else showToast(r.data.error||'Couldn\'t delete the listing. Try again.','error');
     };
+  }
+
+  /* ── Shared: media picker block used by add & edit ── */
+  function mediaPickerHTML() {
+    return `<div class="upload-row">
+        <label class="upload-box" id="photo-drop" for="photo-input">
+          <i class="ti ti-camera"></i><p>Add photos</p><small>Up to 15. We shrink them before upload, so big phone photos are fine.</small>
+          <input type="file" id="photo-input" accept="image/*" multiple class="sr-only" onchange="addMedia(this,'photo')"/>
+        </label>
+        <label class="upload-box" id="video-drop" for="video-input">
+          <i class="ti ti-video"></i><p>Add a video walkthrough</p><small>Optional. MP4 or MOV, up to 50 MB (about a minute at 720p).</small>
+          <input type="file" id="video-input" accept="video/*" class="sr-only" onchange="addMedia(this,'video')"/>
+        </label>
+      </div>
+      <div class="media-preview-grid" id="media-previews"></div>
+      <p class="upload-summary" id="media-summary"></p>`;
+  }
+
+  function bindMediaPicker(uploader) {
+    window.addMedia = async (input, type) => {
+      const files = Array.from(input.files); input.value = ''; // copy first: clearing the input empties its FileList
+      const errors = await uploader.addFiles(files, type);
+      if (errors.length) showToast(errors[0], 'error');
+    };
+    Uploader.bindDrop('photo-drop', async files => { const e = await uploader.addFiles(files, 'photo'); if (e.length) showToast(e[0], 'error'); });
+    Uploader.bindDrop('video-drop', async files => { const e = await uploader.addFiles(files, 'video'); if (e.length) showToast(e[0], 'error'); });
+  }
+
+  /* Shows overall progress while files upload; returns the result */
+  async function runUploads(uploader, listingId, mountId, startOrder = 0) {
+    const mount = el(mountId);
+    if (mount) mount.innerHTML = `<div class="upload-progress"><p>Uploading photos and video <span id="up-count"></span></p><div class="progress-track"><i id="up-bar"></i></div></div>`;
+    uploader.onProgress = () => {
+      const t = uploader.totals();
+      const bar = el('up-bar'); if (bar) bar.style.width = Math.round(t.fraction * 100) + '%';
+      const c = el('up-count'); if (c) c.textContent = `${t.done} of ${t.count} done`;
+    };
+    uploader.onProgress();
+    const res = await uploader.uploadAll(listingId, startOrder);
+    uploader.onProgress();
+    return res;
   }
 
   /* ══════════════════════════════════════════════
      ADD LISTING
   ══════════════════════════════════════════════ */
   async function addListing() {
-    const user = Auth.current();
-    if (!user) { openModal('login-modal'); return; }
-    if (user.role !== 'landlord' && !user.is_admin) { showToast('You need a landlord account.','info'); return; }
-    loading();
+    const user = requireLandlord(); if (!user) return;
     const countiesR = await API.counties();
-    const counties  = countiesR.ok ? countiesR.data : [];
-    let uploadedMedia = [];
+    const counties  = (countiesR.ok ? countiesR.data : []).slice().sort((a,b) => a.name.localeCompare(b.name));
+    const uploader  = Uploader.create({ gridId: 'media-previews', summaryId: 'media-summary' });
+    let createdId = null; // if the listing saved but some uploads failed, retry uses the same listing
 
     app().innerHTML = `
     <div class="dash-layout">
       ${dashSidebarHTML('add-listing', user)}
       <div class="dash-content">
-        <div class="page-header">
-          <button class="back-btn" onclick="Router.go('dashboard')"><i class="ti ti-arrow-left"></i> Back</button>
-          <h1>Add new listing</h1>
+        <div class="form-page">
+          <div class="page-header">
+            <button class="back-btn" onclick="Router.go('dashboard')" aria-label="Back to your listings"><i class="ti ti-arrow-left"></i></button>
+            <h1>Add a listing</h1>
+          </div>
+          <p class="page-lede">Tenants see everything here except your phone number, which they pay to unlock.</p>
+          <form id="add-listing-form" onsubmit="submitAddListing(event)" novalidate>
+            <div class="form-panel">
+              <h2 class="form-panel-title">Photos and video</h2>
+              <p class="form-panel-sub">Listings with five or more clear photos get far more unlocks. Start with the sitting room.</p>
+              ${mediaPickerHTML()}
+            </div>
+            <div class="form-panel">
+              <h2 class="form-panel-title">Where is it?</h2>
+              <p class="form-panel-sub">The street address stays hidden until a tenant unlocks the listing.</p>
+              <div class="form-row">
+                <div class="form-group"><label for="fl-county">County</label>
+                  <select id="fl-county" required onchange="loadAreas(this.value)">
+                    <option value="">Choose a county</option>
+                    ${counties.map(c=>`<option value="${escHtml(c.id)}">${escHtml(c.name)}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group" id="area-group"><label for="fl-area">Area or estate <span class="optional">optional</span></label>
+                  <select id="fl-area" disabled><option value="">Choose a county first</option></select>
+                </div>
+              </div>
+              <div class="form-group"><label for="fl-street">Street address or directions <span class="optional">optional</span></label>
+                <input type="text" id="fl-street" placeholder="Phase 2, Road B, behind the Total petrol station"/>
+              </div>
+            </div>
+            <div class="form-panel">
+              <h2 class="form-panel-title">About the house</h2>
+              <p class="form-panel-sub">Be specific. "2 bedroom with borehole near Thika Road Mall" beats "Spacious modern apartment".</p>
+              <div class="form-group"><label for="fl-title">Listing title</label>
+                <input type="text" id="fl-title" maxlength="80" placeholder="1 bedroom with balcony near Kasarani stadium" required/>
+              </div>
+              <div class="form-row">
+                <div class="form-group"><label for="fl-type">House type</label>
+                  <select id="fl-type" required>${typeOptions('', 'Choose a type')}</select>
+                </div>
+                <div class="form-group"><label for="fl-floor">Floor <span class="optional">optional</span></label>
+                  <select id="fl-floor">
+                    <option value="">Not applicable</option><option value="Ground">Ground floor</option>
+                    <option value="1st">1st floor</option><option value="2nd">2nd floor</option>
+                    <option value="3rd">3rd floor</option><option value="4th+">4th floor or higher</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group"><label for="fl-rent">Rent per month (Ksh)</label>
+                  <input type="number" inputmode="numeric" id="fl-rent" placeholder="14000" min="500" required/>
+                </div>
+                <div class="form-group"><label for="fl-deposit">Deposit</label>
+                  <select id="fl-deposit"><option value="1">1 month's rent</option><option value="2" selected>2 months' rent</option><option value="3">3 months' rent</option></select>
+                </div>
+              </div>
+              <div class="form-group"><label for="fl-desc">Description <span class="optional">optional</span></label>
+                <textarea id="fl-desc" rows="5" placeholder="Size of the rooms, condition, how water and electricity work, what's close by…"></textarea>
+              </div>
+            </div>
+            <div class="form-panel">
+              <h2 class="form-panel-title">What's included</h2>
+              <p class="form-panel-sub">Tick everything that comes with the rent.</p>
+              <div class="check-grid">
+                ${AMENITIES.map(([k,l])=>`<label class="chk-item"><input type="checkbox" name="${k}"/> ${l}</label>`).join('')}
+              </div>
+            </div>
+            <div class="form-panel">
+              <h2 class="form-panel-title">What's nearby</h2>
+              <p class="form-panel-sub">Within about ten minutes' walk.</p>
+              <div class="check-grid">
+                ${NEARBY.map(([k,l])=>`<label class="chk-item"><input type="checkbox" name="${k}"/> ${l}</label>`).join('')}
+              </div>
+            </div>
+            <div id="upload-status"></div>
+            <div id="add-listing-error" class="form-error hidden" style="margin-top:24px"></div>
+            <div class="form-actions">
+              <button type="button" class="btn-text" onclick="Router.go('dashboard')">Cancel</button>
+              <button type="submit" class="btn-primary" id="submit-listing-btn">Publish listing</button>
+            </div>
+          </form>
         </div>
-        <form id="add-listing-form" onsubmit="submitAddListing(event)" style="margin-top:16px">
-          <div class="form-panel">
-            <div class="form-panel-title"><i class="ti ti-map-pin"></i> Location</div>
-            <div class="form-group"><label>County *</label>
-              <select id="fl-county" required onchange="loadAreas(this.value)">
-                <option value="">Select county…</option>
-                ${counties.map(c=>`<option value="${c.id}">${escHtml(c.name)}</option>`).join('')}
-              </select>
-            </div>
-            <div class="form-group hidden" id="area-group"><label>Area / estate</label>
-              <select id="fl-area"><option value="">Select area…</option></select>
-            </div>
-            <div class="form-group"><label>Street address / estate name</label>
-              <input type="text" id="fl-street" placeholder="e.g. Phase 2, Road B, near Total petrol station"/>
-            </div>
-          </div>
-          <div class="form-panel">
-            <div class="form-panel-title"><i class="ti ti-home"></i> Property details</div>
-            <div class="form-group"><label>Listing title *</label>
-              <input type="text" id="fl-title" placeholder="e.g. Modern 1 bedroom apartment in Kasarani" required/>
-            </div>
-            <div class="form-row">
-              <div class="form-group"><label>Property type *</label>
-                <select id="fl-type" required>
-                  <option value="">Select type…</option>
-                  <option value="bedsitter">Bedsitter</option><option value="studio">Studio</option>
-                  <option value="1_bedroom">1 Bedroom</option><option value="2_bedroom">2 Bedroom</option>
-                  <option value="3_bedroom">3 Bedroom</option><option value="4_bedroom">4 Bedroom</option>
-                  <option value="bungalow">Bungalow</option><option value="maisonette">Maisonette</option>
-                  <option value="townhouse">Townhouse</option><option value="apartment">Apartment</option>
-                </select>
-              </div>
-              <div class="form-group"><label>Floor</label>
-                <select id="fl-floor">
-                  <option value="">Any</option><option value="Ground">Ground floor</option>
-                  <option value="1st">1st floor</option><option value="2nd">2nd floor</option>
-                  <option value="3rd">3rd floor</option><option value="4th+">4th floor+</option>
-                </select>
-              </div>
-            </div>
-            <div class="form-row">
-              <div class="form-group"><label>Monthly rent (Ksh) *</label>
-                <input type="number" id="fl-rent" placeholder="e.g. 14000" min="500" required/>
-              </div>
-              <div class="form-group"><label>Deposit (months)</label>
-                <select id="fl-deposit"><option value="1">1 month</option><option value="2" selected>2 months</option><option value="3">3 months</option></select>
-              </div>
-            </div>
-            <div class="form-group"><label>Description</label>
-              <textarea id="fl-desc" rows="4" placeholder="Describe the property — size, condition, nearby landmarks…"></textarea>
-            </div>
-          </div>
-          <div class="form-panel">
-            <div class="form-panel-title"><i class="ti ti-list-check"></i> Amenities & services</div>
-            <div class="check-grid">
-              ${[['has_water','Running water'],['has_borehole','Borehole water'],['has_security','24hr security'],['has_cctv','CCTV cameras'],['has_parking','Vehicle parking'],['has_wifi','WiFi included'],['has_electricity_token','Electricity (token)'],['has_generator','Generator backup'],['is_furnished','Furnished'],['has_dsq','DSQ'],['has_garbage','Garbage collection'],['has_caretaker','Caretaker on-site'],['has_gym','Gym'],['has_pool','Swimming pool'],['has_playground','Children playground'],['is_pet_friendly','Pet-friendly'],['has_balcony','Balcony'],['has_lift','Lift / elevator']].map(([k,l])=>`<label class="chk-item"><input type="checkbox" name="${k}"/> ${l}</label>`).join('')}
-            </div>
-          </div>
-          <div class="form-panel">
-            <div class="form-panel-title"><i class="ti ti-map-2"></i> Nearby services</div>
-            <div class="check-grid">
-              ${[['near_school','School nearby'],['near_hospital','Hospital / clinic'],['near_market','Market / supermarket'],['near_matatu','Matatu stage'],['near_church','Place of worship'],['near_water_kiosk','Water kiosk']].map(([k,l])=>`<label class="chk-item"><input type="checkbox" name="${k}"/> ${l}</label>`).join('')}
-            </div>
-          </div>
-          <div class="form-panel">
-            <div class="form-panel-title"><i class="ti ti-photo"></i> Photos & videos</div>
-            <div class="upload-box" onclick="el('photo-input').click()">
-              <i class="ti ti-camera"></i><p>Tap to upload photos</p><small>JPEG, PNG · Up to 10 photos · Max 10MB each</small>
-              <input type="file" id="photo-input" accept="image/*" multiple style="display:none" onchange="addMedia(this,'photo')"/>
-            </div>
-            <div class="upload-box mt-8" onclick="el('video-input').click()">
-              <i class="ti ti-video"></i><p>Tap to upload a video walkthrough</p><small>MP4 · Max 50MB</small>
-              <input type="file" id="video-input" accept="video/*" style="display:none" onchange="addMedia(this,'video')"/>
-            </div>
-            <div class="media-preview-grid" id="media-previews"></div>
-          </div>
-          <div id="add-listing-error" class="form-error hidden"></div>
-          <button type="submit" class="btn-primary btn-block" id="submit-listing-btn"><i class="ti ti-check"></i> Publish listing</button>
-          <button type="button" class="btn-ghost btn-block mt-8" onclick="Router.go('dashboard')"><i class="ti ti-arrow-left"></i> Cancel</button>
-        </form>
       </div>
     </div>`;
 
+    bindMediaPicker(uploader);
+
     window.loadAreas = async cid => {
-      const ag = el('area-group'), as_ = el('fl-area');
-      if (!cid) { ag && ag.classList.add('hidden'); return; }
-      ag && ag.classList.remove('hidden');
-      as_.innerHTML = '<option value="">Loading…</option>';
+      const as_ = el('fl-area');
+      if (!cid) { as_.innerHTML = '<option value="">Choose a county first</option>'; as_.disabled = true; return; }
+      as_.disabled = true; as_.innerHTML = '<option value="">Loading areas…</option>';
       const r = await API.areas(cid);
-      as_.innerHTML = '<option value="">Select area…</option>';
-      if (r.ok) r.data.forEach(a => { as_.innerHTML += `<option value="${a.id}">${escHtml(a.name)}</option>`; });
+      const areas = r.ok ? r.data : [];
+      as_.innerHTML = `<option value="">${areas.length ? 'Choose an area' : 'No areas listed for this county'}</option>` +
+        areas.map(a => `<option value="${escHtml(a.id)}">${escHtml(a.name)}</option>`).join('');
+      as_.disabled = !areas.length;
     };
-    window.addMedia = (input, type) => {
-      Array.from(input.files).forEach(file => {
-        uploadedMedia.push({ file, type });
-        const url = URL.createObjectURL(file);
-        const idx = uploadedMedia.length - 1;
-        const prev = el('media-previews');
-        const div = document.createElement('div');
-        div.className = 'media-preview-item';
-        div.innerHTML = type === 'photo' ? `<img src="${url}" alt="preview"/>` : `<video src="${url}" style="pointer-events:none"></video>`;
-        const rm = document.createElement('button');
-        rm.type = 'button'; rm.innerHTML = '✕';
-        rm.onclick = () => { uploadedMedia.splice(idx, 1); div.remove(); };
-        div.appendChild(rm); prev.appendChild(div);
-      });
-      input.value = '';
-    };
+
     window.submitAddListing = async e => {
       e.preventDefault();
       const errEl = el('add-listing-error');
@@ -828,17 +897,35 @@ const Pages = (() => {
       const title    = el('fl-title').value.trim();
       const type     = el('fl-type').value;
       const rent     = el('fl-rent').value;
-      if (!countyId || !title || !type || !rent) { showEl(errEl); errEl.textContent = 'Please fill in all required fields.'; return; }
-      const payload = { county_id:countyId, area_id:el('fl-area').value||null, street_address:el('fl-street').value.trim(), title, property_type:type, floor:el('fl-floor').value, monthly_rent:parseInt(rent), deposit_months:parseInt(el('fl-deposit').value), description:el('fl-desc').value.trim() };
-      document.querySelectorAll('#add-listing-form input[type="checkbox"]').forEach(cb => { payload[cb.name] = cb.checked; });
+      const missing  = [!countyId && 'county', !title && 'title', !type && 'house type', !rent && 'rent'].filter(Boolean);
+      if (missing.length) {
+        showEl(errEl); errEl.textContent = `Add the ${missing.join(', ').replace(/, ([^,]*)$/, ' and $1')} before publishing.`;
+        const first = { county: 'fl-county', title: 'fl-title', 'house type': 'fl-type', rent: 'fl-rent' }[missing[0]];
+        el(first) && el(first).focus();
+        return;
+      }
       setLoading(btn, true);
-      const r = await API.createListing(payload);
-      if (!r.ok) { setLoading(btn, false); showEl(errEl); errEl.textContent = r.data.error||'Failed to create listing.'; return; }
-      const lid = r.data.listing_id;
-      for (const m of uploadedMedia) { const fd = new FormData(); fd.append('file',m.file); fd.append('media_type',m.type); await API.uploadMedia(lid, fd); }
+      if (!createdId) {
+        const payload = { county_id:countyId, area_id:el('fl-area').value||null, street_address:el('fl-street').value.trim(), title, property_type:type, floor:el('fl-floor').value, monthly_rent:parseInt(rent, 10), deposit_months:parseInt(el('fl-deposit').value, 10), description:el('fl-desc').value.trim() };
+        document.querySelectorAll('#add-listing-form input[type="checkbox"]').forEach(cb => { payload[cb.name] = cb.checked; });
+        const r = await API.createListing(payload);
+        if (!r.ok) { setLoading(btn, false); showEl(errEl); errEl.textContent = r.data.error||'Your listing didn\'t save. Check your connection and try again.'; return; }
+        createdId = r.data.listing_id;
+      }
+      if (uploader.count()) {
+        btn.innerHTML = '<span class="spinner"></span> Uploading…';
+        const res = await runUploads(uploader, createdId, 'upload-status');
+        if (!res.ok) {
+          setLoading(btn, false);
+          btn.textContent = `Retry ${res.failed.length} failed upload${res.failed.length!==1?'s':''}`;
+          showEl(errEl);
+          errEl.textContent = `Your listing is saved, but ${res.failed.length} file${res.failed.length!==1?'s':''} didn't upload (${res.failed[0].error}). Remove ${res.failed.length!==1?'them':'it'} or press retry.`;
+          return;
+        }
+      }
       setLoading(btn, false);
-      showToast('Listing published successfully!', 'success');
-      Router.go('listing', { id: lid });
+      showToast('Listing published.', 'success');
+      Router.go('listing', { id: createdId });
     };
   }
 
@@ -846,60 +933,101 @@ const Pages = (() => {
      EDIT LISTING
   ══════════════════════════════════════════════ */
   async function editListing(id) {
-    const user = Auth.current();
-    if (!user || (user.role !== 'landlord' && !user.is_admin)) { Router.go('dashboard'); return; }
+    const user = requireLandlord(); if (!user) return;
     loading();
-    const r = await API.listing(id);
-    if (!r.ok) { showToast('Listing not found.','error'); Router.go('dashboard'); return; }
+    let r = await API.ownListing(id);
+    if (!r.ok && (r.status === 404 || r.status === 405)) r = await API.listing(id); // older backend
+    if (!r.ok) { showToast('That listing wasn\'t found.','error'); Router.go('dashboard'); return; }
     const l = r.data.listing;
+    let existing = (r.data.media || []).slice();
+    const uploader = Uploader.create({ gridId: 'media-previews', summaryId: 'media-summary' });
 
     app().innerHTML = `
     <div class="dash-layout">
-      ${dashSidebarHTML('dashboard', user)}
+      ${dashSidebarHTML('edit-listing', user)}
       <div class="dash-content">
-        <div class="page-header">
-          <button class="back-btn" onclick="Router.go('dashboard')"><i class="ti ti-arrow-left"></i> Back</button>
-          <h1>Edit listing</h1>
-        </div>
-        <form id="edit-form" onsubmit="submitEdit(event,'${id}')" style="margin-top:16px">
-          <div class="form-panel">
-            <div class="form-panel-title"><i class="ti ti-home"></i> Property details</div>
-            <div class="form-group"><label>Listing title *</label><input type="text" id="el-title" value="${escHtml(l.title)}" required/></div>
-            <div class="form-row">
-              <div class="form-group"><label>Monthly rent (Ksh) *</label><input type="number" id="el-rent" value="${l.monthly_rent}" required/></div>
-              <div class="form-group"><label>Status</label>
-                <select id="el-status">
-                  <option value="active" ${l.status==='active'?'selected':''}>Active</option>
-                  <option value="inactive" ${l.status==='inactive'?'selected':''}>Inactive</option>
-                </select>
+        <div class="form-page">
+          <div class="page-header">
+            <button class="back-btn" onclick="Router.go('dashboard')" aria-label="Back to your listings"><i class="ti ti-arrow-left"></i></button>
+            <h1>Edit listing</h1>
+          </div>
+          <p class="page-lede">${escHtml(l.title)}</p>
+          <form id="edit-form" onsubmit="submitEdit(event,'${jsStr(id)}')">
+            <div class="form-panel">
+              <h2 class="form-panel-title">Photos and video</h2>
+              <p class="form-panel-sub">Remove old photos or add new ones. New files upload when you save.</p>
+              <div class="media-preview-grid" id="existing-media"></div>
+              ${mediaPickerHTML()}
+            </div>
+            <div class="form-panel">
+              <h2 class="form-panel-title">Details</h2>
+              <div class="form-group"><label for="el-title">Listing title</label><input type="text" id="el-title" maxlength="80" value="${escHtml(l.title)}" required/></div>
+              <div class="form-row">
+                <div class="form-group"><label for="el-rent">Rent per month (Ksh)</label><input type="number" inputmode="numeric" id="el-rent" value="${escHtml(l.monthly_rent)}" required/></div>
+                <div class="form-group"><label for="el-status">Visibility</label>
+                  <select id="el-status">
+                    <option value="active" ${l.status==='active'?'selected':''}>Live, tenants can see it</option>
+                    <option value="inactive" ${l.status==='inactive'?'selected':''}>Hidden, for example once it's let</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-group"><label for="el-desc">Description</label><textarea id="el-desc" rows="5">${escHtml(l.description||'')}</textarea></div>
+            </div>
+            <div class="form-panel">
+              <h2 class="form-panel-title">What's included and nearby</h2>
+              <div class="check-grid">
+                ${AMENITIES.concat(NEARBY.map(([k,lb,ic]) => [k, 'Near: ' + lb.toLowerCase(), ic])).map(([k,lb])=>`<label class="chk-item"><input type="checkbox" name="${k}" ${l[k]?'checked':''}/> ${lb}</label>`).join('')}
               </div>
             </div>
-            <div class="form-group"><label>Description</label><textarea id="el-desc" rows="4">${escHtml(l.description||'')}</textarea></div>
-          </div>
-          <div class="form-panel">
-            <div class="form-panel-title"><i class="ti ti-list-check"></i> Amenities & nearby</div>
-            <div class="check-grid">
-              ${[['has_water','Running water'],['has_borehole','Borehole'],['has_security','24hr security'],['has_cctv','CCTV'],['has_parking','Parking'],['has_wifi','WiFi'],['has_electricity_token','Electricity token'],['has_generator','Generator'],['is_furnished','Furnished'],['has_dsq','DSQ'],['has_garbage','Garbage collection'],['has_caretaker','Caretaker'],['has_gym','Gym'],['has_pool','Pool'],['has_playground','Playground'],['is_pet_friendly','Pet-friendly'],['has_balcony','Balcony'],['has_lift','Lift'],['near_school','Near school'],['near_hospital','Near hospital'],['near_market','Near market'],['near_matatu','Near matatu'],['near_church','Near church'],['near_water_kiosk','Water kiosk']].map(([k,lb])=>`<label class="chk-item"><input type="checkbox" name="${k}" ${l[k]?'checked':''}/> ${lb}</label>`).join('')}
+            <div id="upload-status"></div>
+            <div id="edit-error" class="form-error hidden" style="margin-top:24px"></div>
+            <div class="form-actions">
+              <button type="button" class="btn-text" onclick="Router.go('listing',{id:'${jsStr(id)}'})">View listing</button>
+              <button type="submit" class="btn-primary" id="edit-btn">Save changes</button>
             </div>
-          </div>
-          <div id="edit-error" class="form-error hidden"></div>
-          <button type="submit" class="btn-primary btn-block" id="edit-btn"><i class="ti ti-check"></i> Save changes</button>
-          <button type="button" class="btn-ghost btn-block mt-8" onclick="Router.go('listing',{id:'${id}'})"><i class="ti ti-eye"></i> View listing</button>
-          <button type="button" class="btn-ghost btn-block mt-8" onclick="Router.go('dashboard')"><i class="ti ti-arrow-left"></i> Back to dashboard</button>
-        </form>
+          </form>
+        </div>
       </div>
     </div>`;
+
+    function renderExisting() {
+      const g = el('existing-media'); if (!g) return;
+      g.innerHTML = existing.map((m, i) => `<div class="media-preview-item">
+          ${m.media_type === 'video' ? `<video src="${escHtml(m.url)}#t=0.5" muted preload="metadata"></video>` : `<img src="${escHtml(m.url)}" alt="" loading="lazy"/>`}
+          ${i === 0 && m.media_type === 'photo' ? '<span class="mp-cover">Cover</span>' : ''}
+          <button type="button" class="mp-remove" onclick="removeExistingMedia('${jsStr(m.id)}')" aria-label="Delete this file"><i class="ti ti-trash"></i></button>
+        </div>`).join('');
+    }
+    renderExisting();
+    bindMediaPicker(uploader);
+
+    window.removeExistingMedia = async mediaId => {
+      if (!confirm('Delete this file from the listing?')) return;
+      const rr = await API.deleteMedia(id, mediaId);
+      if (rr.ok) { existing = existing.filter(m => String(m.id) !== String(mediaId)); renderExisting(); showToast('File deleted.', 'success'); }
+      else showToast(rr.data.error || 'Couldn\'t delete the file.', 'error');
+    };
 
     window.submitEdit = async (e, lid) => {
       e.preventDefault();
       const errEl = el('edit-error'); const btn = el('edit-btn'); hideEl(errEl);
-      const payload = { title:el('el-title').value.trim(), monthly_rent:parseInt(el('el-rent').value), description:el('el-desc').value.trim(), status:el('el-status').value };
+      const payload = { title:el('el-title').value.trim(), monthly_rent:parseInt(el('el-rent').value, 10), description:el('el-desc').value.trim(), status:el('el-status').value };
       document.querySelectorAll('#edit-form input[type="checkbox"]').forEach(cb => { payload[cb.name] = cb.checked; });
       setLoading(btn, true);
       const r = await API.updateListing(lid, payload);
+      if (!r.ok) { setLoading(btn, false); showEl(errEl); errEl.textContent = r.data.error||'Your changes didn\'t save. Try again.'; return; }
+      if (uploader.count()) {
+        btn.innerHTML = '<span class="spinner"></span> Uploading…';
+        const res = await runUploads(uploader, lid, 'upload-status', existing.length);
+        if (!res.ok) {
+          setLoading(btn, false);
+          showEl(errEl); errEl.textContent = `Changes saved, but ${res.failed.length} file${res.failed.length!==1?'s':''} didn't upload. Press save to retry.`;
+          return;
+        }
+      }
       setLoading(btn, false);
-      if (r.ok) { showToast('Listing updated.','success'); Router.go('listing',{id:lid}); }
-      else { showEl(errEl); errEl.textContent = r.data.error||'Update failed.'; }
+      showToast('Changes saved.','success');
+      Router.go(payload.status === 'active' ? 'listing' : 'dashboard', { id: lid });
     };
   }
 
@@ -908,7 +1036,7 @@ const Pages = (() => {
   ══════════════════════════════════════════════ */
   async function unlocks() {
     const user = Auth.current();
-    if (!user) { openModal('login-modal'); return; }
+    if (!user) { openModal('login-modal'); app().innerHTML = emptyState('ti-key','Log in to see your unlocked houses','Every house you pay for stays here, with the landlord\'s number.','Log in',"openModal('login-modal')"); return; }
     loading();
     const r    = await API.myUnlocks();
     const data = r.ok ? r.data : [];
@@ -917,22 +1045,19 @@ const Pages = (() => {
     <div class="dash-layout">
       ${dashSidebarHTML('unlocks', user)}
       <div class="dash-content">
-        <div class="page-header">
-          <button class="back-btn" onclick="Router.go('home')"><i class="ti ti-arrow-left"></i> Back</button>
-          <h1>My unlocked houses</h1>
-        </div>
-        <p style="font-size:13px;color:var(--text-2);margin:12px 0 20px">Houses whose landlord contacts you have already paid to unlock.</p>
+        <div class="page-header"><h1>Unlocked houses</h1></div>
+        <p class="page-lede">Houses you've paid for. Open one to see the landlord's number again.</p>
         ${data.length === 0
-          ? emptyState('ti-key-off','No unlocked houses yet','Browse listings and unlock the ones you like.','Browse listings',"Router.go('browse')")
+          ? emptyState('ti-key','Nothing unlocked yet','When you pay for a house, it stays here so you can find the landlord\'s number later.','Browse houses',"Router.go('browse')")
           : data.map(u=>`
             <div class="unlock-card">
-              <div class="unlock-card-icon"><i class="ti ti-building"></i></div>
+              <div class="unlock-card-icon">${u.cover_photo ? `<img src="${escHtml(u.cover_photo)}" alt="" loading="lazy"/>` : '<i class="ti ti-photo"></i>'}</div>
               <div class="unlock-card-info">
                 <h4>${escHtml(u.title)}</h4>
-                <p>${escHtml(u.county_name)}${u.area_name?' · '+escHtml(u.area_name):''} · ${formatPrice(u.monthly_rent)}/mo · ${typeLabel(u.property_type)}</p>
-                <p style="font-size:11px;color:var(--text-3);margin-top:2px">Unlocked ${timeAgo(u.completed_at)}</p>
+                <p>${placeLine(u.area_name, u.county_name)}, ${formatPrice(u.monthly_rent)} a month, ${typeLabel(u.property_type).toLowerCase()}</p>
+                <p>Unlocked ${timeAgo(u.completed_at).toLowerCase()}</p>
               </div>
-              <button class="btn-primary btn-sm" onclick="Router.go('listing',{id:'${u.listing_id}'})"><i class="ti ti-eye"></i> View</button>
+              <button class="btn-outline btn-sm" onclick="Router.go('listing',{id:'${jsStr(u.listing_id)}'})">See contact</button>
             </div>`).join('')}
       </div>
     </div>`;
@@ -948,47 +1073,43 @@ const Pages = (() => {
     const r = await API.me();
     const u = r.ok ? r.data : user;
 
-    // Pre-compute values to avoid nested template literal issues
     const avatarClass   = u.is_admin ? 'profile-avatar admin' : 'profile-avatar';
     const avatarLetter  = (u.full_name || u.email || 'U').charAt(0).toUpperCase();
     const badgeClass    = u.is_admin ? 'profile-badge admin-badge' : 'profile-badge';
-    const badgeIcon     = u.is_admin ? 'ti-shield' : (u.role === 'landlord' ? 'ti-key' : 'ti-user');
-    const badgeLabel    = u.is_admin ? 'Admin' : (u.role === 'landlord' ? 'Landlord' : 'Tenant');
     const accountType   = u.is_admin ? 'Admin' : (u.role === 'landlord' ? 'Landlord' : 'Tenant');
-    const phoneRow      = u.phone     ? `<p><i class="ti ti-phone" style="font-size:13px;vertical-align:-2px"></i> ${escHtml(u.phone)}</p>` : '';
-    const idRow         = u.id_number ? `<p><i class="ti ti-id" style="font-size:13px;vertical-align:-2px"></i> ID: ${escHtml(u.id_number)}</p>` : '';
-    const locationRow   = u.location  ? `<p><i class="ti ti-map-pin" style="font-size:13px;vertical-align:-2px"></i> ${escHtml(u.location)}</p>` : '';
+    const phoneRow      = u.phone    ? `<p><i class="ti ti-phone"></i> ${escHtml(u.phone)}</p>` : '';
+    const locationRow   = u.location ? `<p><i class="ti ti-map-pin"></i> ${escHtml(u.location)}</p>` : '';
 
     app().innerHTML = `
     <div class="dash-layout">
       ${dashSidebarHTML('profile', user)}
       <div class="dash-content">
-        <div class="page-header">
-          <button class="back-btn" onclick="history.back()"><i class="ti ti-arrow-left"></i> Back</button>
-          <h1>My profile</h1>
-        </div>
-        <div class="profile-info-card" style="margin-top:16px">
-          <div class="${avatarClass}">${avatarLetter}</div>
-          <div class="profile-meta">
-            <h3>${escHtml(u.full_name || '')}</h3>
-            <p><i class="ti ti-mail" style="font-size:13px;vertical-align:-2px"></i> ${escHtml(u.email || '')}</p>
-            ${phoneRow}
-            ${idRow}
-            ${locationRow}
-            <span class="${badgeClass}"><i class="ti ${badgeIcon}"></i> ${badgeLabel}</span>
+        <div class="form-page">
+          <div class="page-header"><h1>Profile</h1></div>
+          <p class="page-lede">This is what we use to send M-Pesa prompts and, for landlords, what tenants see after they pay.</p>
+          <div class="profile-info-card">
+            <div class="${avatarClass}">${avatarLetter}</div>
+            <div class="profile-meta">
+              <h3>${escHtml(u.full_name || '')}</h3>
+              <p><i class="ti ti-mail"></i> ${escHtml(u.email || '')}</p>
+              ${phoneRow}
+              ${locationRow}
+              <span class="${badgeClass}">${accountType} account</span>
+            </div>
           </div>
-        </div>
-        <div class="form-panel">
-          <div class="form-panel-title"><i class="ti ti-edit"></i> Edit profile</div>
-          <div class="form-group"><label>Full name</label><input type="text" id="p-name" value="${escHtml(u.full_name||'')}"/></div>
-          <div class="form-group"><label>Phone number (M-Pesa)</label><input type="tel" id="p-phone" value="${escHtml(u.phone||'')}" placeholder="07XX XXX XXX"/></div>
-          <div class="form-group"><label>ID / Passport number</label><input type="text" id="p-idnumber" value="${escHtml(u.id_number||'')}"/></div>
-          <div class="form-group"><label>Location / Town</label><input type="text" id="p-location" value="${escHtml(u.location||'')}" placeholder="e.g. Nairobi, Kasarani"/></div>
-          <div class="form-group"><label>Email address</label><input type="email" value="${escHtml(u.email||'')}" disabled style="opacity:0.6"/></div>
-          <div class="form-group"><label>Account type</label><input type="text" value="${accountType}" disabled style="opacity:0.6"/></div>
-          <div id="profile-error" class="form-error hidden"></div>
-          <div id="profile-success" class="form-success hidden">Profile updated successfully.</div>
-          <button class="btn-primary btn-block" id="save-profile-btn" onclick="saveProfile()"><i class="ti ti-check"></i> Save changes</button>
+          <div class="form-panel">
+            <h2 class="form-panel-title">Your details</h2>
+            <div class="form-group"><label for="p-name">Full name</label><input type="text" id="p-name" value="${escHtml(u.full_name||'')}" autocomplete="name"/></div>
+            <div class="form-row">
+              <div class="form-group"><label for="p-phone">M-Pesa phone number</label><input type="tel" id="p-phone" value="${escHtml(u.phone||'')}" placeholder="07XX XXX XXX" autocomplete="tel"/></div>
+              <div class="form-group"><label for="p-location">Town</label><input type="text" id="p-location" value="${escHtml(u.location||'')}" placeholder="Nairobi, Kasarani"/></div>
+            </div>
+            <div class="form-group"><label for="p-idnumber">ID or passport number <span class="optional">optional</span></label><input type="text" id="p-idnumber" value="${escHtml(u.id_number||'')}"/></div>
+            <div class="form-group"><label for="p-email">Email</label><input type="email" id="p-email" value="${escHtml(u.email||'')}" disabled/><p class="form-hint">Your email can't be changed here. WhatsApp support if you need to.</p></div>
+            <div id="profile-error" class="form-error hidden"></div>
+            <div id="profile-success" class="form-success hidden">Changes saved.</div>
+            <div class="form-actions" style="justify-content:flex-end"><button class="btn-primary" id="save-profile-btn" onclick="saveProfile()">Save changes</button></div>
+          </div>
         </div>
       </div>
     </div>`;
@@ -1000,7 +1121,7 @@ const Pages = (() => {
       const r = await API.updateProfile({ full_name:el('p-name').value.trim(), phone:el('p-phone').value.trim(), id_number:el('p-idnumber').value.trim(), location:el('p-location').value.trim() });
       setLoading(btn, false);
       if (r.ok) { showEl(sucEl); await Auth.restoreSession(); }
-      else { showEl(errEl); errEl.textContent = r.data.error||'Update failed.'; }
+      else { showEl(errEl); errEl.textContent = r.data.error||'Your changes didn\'t save. Try again.'; }
     };
   }
 
@@ -1012,119 +1133,90 @@ const Pages = (() => {
     if (!user || !user.is_admin) { Router.go('home'); return; }
     loading();
     const r = await API.adminLandlordDetail(landlordId);
-    if (!r.ok) { showToast('Failed to load landlord.', 'error'); Router.go('admin'); return; }
+    if (!r.ok) { showToast('Couldn\'t load that landlord.', 'error'); Router.go('admin'); return; }
     const { profile: lp, listings } = r.data;
 
-    const initial    = (lp.full_name || lp.email || 'L').charAt(0).toUpperCase();
-    const totalViews = listings.reduce((s, l) => s + (l.views || 0), 0);
+    const initial      = (lp.full_name || lp.email || 'L').charAt(0).toUpperCase();
+    const totalViews   = listings.reduce((s, l) => s + (l.views || 0), 0);
     const totalUnlocks = listings.reduce((s, l) => s + (l.unlock_count || 0), 0);
-    const activeCount = listings.filter(l => l.status === 'active').length;
+    const activeCount  = listings.filter(l => l.status === 'active').length;
+    const lid = jsStr(landlordId);
 
-    function listingRows() {
-      if (listings.length === 0) {
-        return '<p style="font-size:13px;color:var(--text-3);padding:20px 0;text-align:center">This landlord has no listings yet.</p>';
-      }
-      return listings.map(function(l) {
-        var area       = l.area_name ? ' · ' + escHtml(l.area_name) : '';
-        var statusCls  = 'status-badge status-' + l.status;
-        var imgHtml    = l.cover_photo
-          ? '<img src="' + l.cover_photo + '" style="width:100%;height:100%;object-fit:cover" alt="cover"/>'
-          : '<i class="ti ti-building" style="font-size:20px;color:var(--orange)"></i>';
-        return '<div class="listing-row" style="flex-wrap:wrap">'
-          + '<div class="lr-thumb">' + imgHtml + '</div>'
-          + '<div class="lr-info" style="flex:1;min-width:160px">'
-          +   '<h4>' + escHtml(l.title) + '</h4>'
-          +   '<p>' + escHtml(l.county_name) + area + ' · ' + formatPrice(l.monthly_rent) + '/mo</p>'
-          +   '<p style="font-size:11px;color:var(--text-3)">' + l.views + ' views · ' + l.unlock_count + ' unlocks · ' + l.photo_count + ' photos · Listed ' + timeAgo(l.created_at) + '</p>'
-          + '</div>'
-          + '<span class="' + statusCls + '">' + l.status.charAt(0).toUpperCase() + l.status.slice(1) + '</span>'
-          + '<div class="lr-actions" style="flex-wrap:wrap">'
-          +   '<button class="btn-ghost btn-xs" onclick="Router.go(\'listing\',{id:\'' + l.id + '\'})"><i class="ti ti-eye"></i> View</button>'
-          +   '<button class="btn-ghost btn-xs" onclick="adminEditListing(\'' + l.id + '\')"><i class="ti ti-edit"></i> Edit</button>'
-          +   (l.status === 'active'
-              ? '<button class="btn-ghost btn-xs" onclick="adminToggleListingStatus(\'' + l.id + '\',\'inactive\')"><i class="ti ti-eye-off"></i> Deactivate</button>'
-              : '<button class="btn-ghost btn-xs" onclick="adminToggleListingStatus(\'' + l.id + '\',\'active\')"><i class="ti ti-eye"></i> Activate</button>')
-          +   '<button class="btn-danger btn-xs" onclick="adminDeleteOneListing(\'' + l.id + '\',\'' + landlordId + '\')"><i class="ti ti-trash"></i> Delete</button>'
-          + '</div>'
-          + '</div>';
-      }).join('');
-    }
+    const rows = listings.length === 0
+      ? '<p class="text-muted" style="padding:24px 0">This landlord hasn\'t listed anything yet.</p>'
+      : listings.map(l => `<div class="listing-row">
+          <div class="lr-thumb">${l.cover_photo ? `<img src="${escHtml(l.cover_photo)}" alt="" loading="lazy"/>` : '<i class="ti ti-photo"></i>'}</div>
+          <div class="lr-info">
+            <h4>${escHtml(l.title)}</h4>
+            <p>${placeLine(l.area_name, l.county_name)}, ${formatPrice(l.monthly_rent)} a month</p>
+            <p>${l.views} views, ${l.unlock_count} unlocks, ${l.photo_count} photos, listed ${timeAgo(l.created_at).toLowerCase()}</p>
+          </div>
+          <span class="status-badge status-${escHtml(l.status)}">${({active:'Live',pending:'In review',inactive:'Hidden'})[l.status]||escHtml(l.status)}</span>
+          <div class="lr-actions">
+            <button class="btn-ghost btn-xs" onclick="Router.go('edit-listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-edit"></i> Edit</button>
+            ${l.status === 'active'
+              ? `<button class="btn-ghost btn-xs" onclick="adminToggleListingStatus('${jsStr(l.id)}','inactive')"><i class="ti ti-eye-off"></i> Hide</button>`
+              : `<button class="btn-ghost btn-xs" onclick="adminToggleListingStatus('${jsStr(l.id)}','active')"><i class="ti ti-eye"></i> Make live</button>`}
+            <button class="btn-danger btn-xs" onclick="adminDeleteOneListing('${jsStr(l.id)}','${lid}')" aria-label="Delete"><i class="ti ti-trash"></i></button>
+          </div>
+        </div>`).join('');
 
-    app().innerHTML = '<div class="dash-layout">'
-      + dashSidebarHTML('admin', user)
-      + '<div class="dash-content">'
-      +   '<div class="page-header">'
-      +     '<button class="back-btn" onclick="Router.go(\'admin\')"><i class="ti ti-arrow-left"></i> Back to Admin</button>'
-      +     '<h1>Landlord profile</h1>'
-      +   '</div>'
-
-      // Profile card
-      +   '<div class="profile-info-card" style="margin-top:16px">'
-      +     '<div class="admin-landlord-avatar" style="width:52px;height:52px;font-size:22px">' + initial + '</div>'
-      +     '<div class="profile-meta" style="flex:1">'
-      +       '<h3>' + escHtml(lp.full_name || 'Unknown') + '</h3>'
-      +       '<p><i class="ti ti-mail" style="font-size:13px;vertical-align:-2px"></i> ' + escHtml(lp.email || '') + '</p>'
-      +       (lp.phone     ? '<p><i class="ti ti-phone"  style="font-size:13px;vertical-align:-2px"></i> ' + escHtml(lp.phone)     + '</p>' : '')
-      +       (lp.id_number ? '<p><i class="ti ti-id"     style="font-size:13px;vertical-align:-2px"></i> ID: ' + escHtml(lp.id_number) + '</p>' : '')
-      +       (lp.location  ? '<p><i class="ti ti-map-pin" style="font-size:13px;vertical-align:-2px"></i> ' + escHtml(lp.location)  + '</p>' : '')
-      +       '<p style="font-size:11px;color:var(--text-3);margin-top:4px">Joined ' + timeAgo(lp.created_at) + '</p>'
-      +     '</div>'
-      +   '</div>'
-
-      // Stats row
-      +   '<div class="metrics-row" style="margin-top:14px">'
-      +     '<div class="metric-card"><strong>' + listings.length + '</strong><span>Total listings</span></div>'
-      +     '<div class="metric-card"><strong>' + activeCount + '</strong><span>Active</span></div>'
-      +     '<div class="metric-card"><strong>' + totalViews + '</strong><span>Total views</span></div>'
-      +     '<div class="metric-card"><strong>' + totalUnlocks + '</strong><span>Unlocks</span></div>'
-      +   '</div>'
-
-      // Action buttons
-      +   '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">'
-      +     '<button class="btn-danger btn-sm" onclick="adminSuspendLandlord(\'' + landlordId + '\')">'
-      +       '<i class="ti ti-user-off"></i> Suspend landlord (deactivate all listings)'
-      +     '</button>'
-      +     '<button class="btn-green btn-sm" onclick="adminRestoreLandlord(\'' + landlordId + '\')">'
-      +       '<i class="ti ti-user-check"></i> Restore all listings'
-      +     '</button>'
-      +   '</div>'
-
-      // Listings
-      +   '<div class="panel">'
-      +     '<div class="panel-title"><i class="ti ti-building"></i> All listings by this landlord</div>'
-      +     '<div id="landlord-listings-container">' + listingRows() + '</div>'
-      +   '</div>'
-      + '</div>'
-      + '</div>';
-
-    // Actions
-    window.adminEditListing = function(id) { Router.go('edit-listing', { id: id }); };
+    app().innerHTML = `
+    <div class="dash-layout">
+      ${dashSidebarHTML('admin', user)}
+      <div class="dash-content">
+        <div class="page-header">
+          <button class="back-btn" onclick="Router.go('admin')" aria-label="Back to admin"><i class="ti ti-arrow-left"></i></button>
+          <h1>Landlord</h1>
+        </div>
+        <div class="profile-info-card" style="margin:24px 0">
+          <div class="admin-landlord-avatar" style="width:64px;height:64px;font-size:24px">${initial}</div>
+          <div class="profile-meta" style="flex:1">
+            <h3>${escHtml(lp.full_name || 'No name')}</h3>
+            <p><i class="ti ti-mail"></i> ${escHtml(lp.email || '')}</p>
+            ${lp.phone     ? `<p><i class="ti ti-phone"></i> ${escHtml(lp.phone)}</p>` : ''}
+            ${lp.id_number ? `<p><i class="ti ti-id"></i> ID ${escHtml(lp.id_number)}</p>` : ''}
+            ${lp.location  ? `<p><i class="ti ti-map-pin"></i> ${escHtml(lp.location)}</p>` : ''}
+            <p>Joined ${timeAgo(lp.created_at).toLowerCase()}</p>
+          </div>
+        </div>
+        <div class="metrics-row">
+          <div class="metric-card"><strong>${listings.length}</strong><span>Listings</span></div>
+          <div class="metric-card"><strong>${activeCount}</strong><span>Live</span></div>
+          <div class="metric-card"><strong>${totalViews}</strong><span>Views</span></div>
+          <div class="metric-card"><strong>${totalUnlocks}</strong><span>Unlocks</span></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:32px">
+          <button class="btn-danger btn-sm" onclick="adminSuspendLandlord('${lid}')"><i class="ti ti-user-off"></i> Suspend and hide all listings</button>
+          <button class="btn-green btn-sm" onclick="adminRestoreLandlord('${lid}')"><i class="ti ti-user-check"></i> Make all listings live again</button>
+        </div>
+        <div class="list-head"><h3>Their listings</h3></div>
+        <div id="landlord-listings-container">${rows}</div>
+      </div>
+    </div>`;
 
     window.adminToggleListingStatus = async function(id, newStatus) {
-      var r = await API.updateListing(id, { status: newStatus });
-      if (r.ok) { showToast('Listing ' + newStatus + '.', 'success'); adminLandlord(landlordId); }
-      else showToast(r.data.error || 'Failed.', 'error');
+      const r = await API.updateListing(id, { status: newStatus });
+      if (r.ok) { showToast(newStatus === 'active' ? 'Listing is live.' : 'Listing hidden.', 'success'); adminLandlord(landlordId); }
+      else showToast(r.data.error || 'That didn\'t work. Try again.', 'error');
     };
-
-    window.adminDeleteOneListing = async function(id, lid) {
-      if (!confirm('Delete this listing permanently? This cannot be undone.')) return;
-      var r = await API.deleteListing(id);
-      if (r.ok) { showToast('Listing deleted.', 'success'); adminLandlord(lid); }
-      else showToast(r.data.error || 'Delete failed.', 'error');
+    window.adminDeleteOneListing = async function(id, llid) {
+      if (!confirm('Delete this listing for good? You can\'t undo this.')) return;
+      const r = await API.deleteListing(id);
+      if (r.ok) { showToast('Listing deleted.', 'success'); adminLandlord(llid); }
+      else showToast(r.data.error || 'Couldn\'t delete it. Try again.', 'error');
     };
-
-    window.adminSuspendLandlord = async function(lid) {
-      if (!confirm('Suspend this landlord? All their listings will be deactivated.')) return;
-      var r = await API.adminSuspendLandlord(lid);
-      if (r.ok) { showToast(r.data.message, 'success'); adminLandlord(lid); }
-      else showToast(r.data.error || 'Failed.', 'error');
+    window.adminSuspendLandlord = async function(llid) {
+      if (!confirm('Suspend this landlord? All their listings will be hidden.')) return;
+      const r = await API.adminSuspendLandlord(llid);
+      if (r.ok) { showToast(r.data.message, 'success'); adminLandlord(llid); }
+      else showToast(r.data.error || 'That didn\'t work. Try again.', 'error');
     };
-
-    window.adminRestoreLandlord = async function(lid) {
-      if (!confirm('Restore this landlord? All their listings will be reactivated.')) return;
-      var r = await API.adminRestoreLandlord(lid);
-      if (r.ok) { showToast(r.data.message, 'success'); adminLandlord(lid); }
-      else showToast(r.data.error || 'Failed.', 'error');
+    window.adminRestoreLandlord = async function(llid) {
+      if (!confirm('Make all of this landlord\'s listings live again?')) return;
+      const r = await API.adminRestoreLandlord(llid);
+      if (r.ok) { showToast(r.data.message, 'success'); adminLandlord(llid); }
+      else showToast(r.data.error || 'That didn\'t work. Try again.', 'error');
     };
   }
 
@@ -1133,7 +1225,7 @@ const Pages = (() => {
   ══════════════════════════════════════════════ */
   async function admin() {
     const user = Auth.current();
-    if (!user || !user.is_admin) { showToast('Admin access required.','error'); Router.go('home'); return; }
+    if (!user || !user.is_admin) { showToast('That page is for admins only.','error'); Router.go('home'); return; }
     loading();
     const [statsR, listingsR, landlordsR] = await Promise.all([
       API.adminStats(), API.adminListings(), API.adminLandlords()
@@ -1144,69 +1236,49 @@ const Pages = (() => {
     let activeTab   = 'listings';
 
     function adminListingRow(l) {
-      var area      = l.area_name ? ' &middot; ' + escHtml(l.area_name) : '';
-      var statusCls = 'status-badge status-' + l.status;
-      return '<div class="admin-listing-row">'
-        + '<div class="lr-thumb"><i class="ti ti-building"></i></div>'
-        + '<div class="lr-info" style="flex:1">'
-        +   '<h4>' + escHtml(l.title) + '</h4>'
-        +   '<p>' + escHtml(l.county_name) + area + ' &middot; ' + formatPrice(l.monthly_rent) + '/mo</p>'
-        +   '<p style="font-size:11px;color:var(--text-3)">By: ' + escHtml(l.landlord_name || '') + ' &middot; ' + escHtml(l.landlord_phone || '') + ' &middot; ' + l.views + ' views &middot; ' + l.unlock_count + ' unlocks</p>'
-        + '</div>'
-        + '<span class="' + statusCls + '">' + l.status + '</span>'
-        + '<div class="lr-actions">'
-        +   '<button class="btn-ghost btn-xs" onclick="Router.go(\'listing\',{id:\'' + l.id + '\'})"><i class="ti ti-eye"></i> View</button>'
-        +   '<button class="btn-danger btn-xs" onclick="adminDeleteListing(\'' + l.id + '\')"><i class="ti ti-trash"></i> Delete</button>'
-        + '</div>'
-        + '</div>';
+      return `<div class="admin-listing-row">
+        <div class="lr-thumb">${l.cover_photo ? `<img src="${escHtml(l.cover_photo)}" alt="" loading="lazy"/>` : '<i class="ti ti-photo"></i>'}</div>
+        <div class="lr-info">
+          <h4>${escHtml(l.title)}</h4>
+          <p>${placeLine(l.area_name, l.county_name)}, ${formatPrice(l.monthly_rent)} a month</p>
+          <p>${escHtml(l.landlord_name || 'Unknown landlord')}${l.landlord_phone ? ', ' + escHtml(l.landlord_phone) : ''}. ${l.views} views, ${l.unlock_count} unlocks</p>
+        </div>
+        <span class="status-badge status-${escHtml(l.status)}">${({active:'Live',pending:'In review',inactive:'Hidden'})[l.status]||escHtml(l.status)}</span>
+        <div class="lr-actions">
+          <button class="btn-ghost btn-xs" onclick="Router.go('listing',{id:'${jsStr(l.id)}'})"><i class="ti ti-eye"></i> View</button>
+          <button class="btn-danger btn-xs" onclick="adminDeleteListing('${jsStr(l.id)}')" aria-label="Delete"><i class="ti ti-trash"></i></button>
+        </div>
+      </div>`;
     }
 
     function adminLandlordCard(l) {
-      var initial      = (l.full_name || l.email || 'L').charAt(0).toUpperCase();
-      var plural       = l.listing_count !== 1 ? 's' : '';
-      var phoneHtml    = l.phone     ? '<div class="admin-contact-row"><i class="ti ti-phone"></i> ' + escHtml(l.phone) + '</div>' : '';
-      var idHtml       = l.id_number ? '<div class="admin-contact-row"><i class="ti ti-id"></i> ID: ' + escHtml(l.id_number) + '</div>' : '';
-      var locationHtml = l.location  ? '<div class="admin-contact-row"><i class="ti ti-map-pin"></i> ' + escHtml(l.location) + '</div>' : '';
-      return '<div class="admin-landlord-card" style="cursor:pointer" onclick="Pages._adminLandlord(\'' + l.id + '\')">'
-        + '<div class="admin-landlord-header">'
-        +   '<div class="admin-landlord-avatar">' + initial + '</div>'
-        +   '<div class="admin-landlord-info" style="flex:1">'
-        +     '<h4>' + escHtml(l.full_name || 'Unknown') + '</h4>'
-        +     '<p>' + l.listing_count + ' listing' + plural
-        +       ' (' + (l.active_listings || 0) + ' active)'
-        +       ' &middot; ' + l.total_views + ' views &middot; ' + l.total_unlocks + ' unlocks</p>'
-        +   '</div>'
-        +   '<span class="status-badge status-active" style="flex-shrink:0">Landlord</span>'
-        + '</div>'
-        + '<div class="admin-contact-row"><i class="ti ti-mail"></i> ' + escHtml(l.email || '') + '</div>'
-        + phoneHtml + idHtml + locationHtml
-        + '<p style="font-size:11px;color:var(--text-3);margin-top:6px">Joined ' + timeAgo(l.created_at) + '</p>'
-        + '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap" onclick="event.stopPropagation()">'
-        +   '<button class="btn-primary btn-xs" onclick="Pages._adminLandlord(\'' + l.id + '\')">'
-        +     '<i class="ti ti-eye"></i> View listings'
-        +   '</button>'
-        +   '<button class="btn-danger btn-xs" onclick="quickSuspend(\'' + l.id + '\')">'
-        +     '<i class="ti ti-user-off"></i> Suspend'
-        +   '</button>'
-        + '</div>'
-        + '</div>';
+      const initial = (l.full_name || l.email || 'L').charAt(0).toUpperCase();
+      return `<div class="admin-landlord-card">
+        <div class="admin-landlord-header">
+          <div class="admin-landlord-avatar">${initial}</div>
+          <div class="admin-landlord-info" style="flex:1">
+            <h4>${escHtml(l.full_name || 'No name')}</h4>
+            <p>${l.listing_count} listing${l.listing_count != 1 ? 's' : ''} (${l.active_listings || 0} live), ${l.total_views} views, ${l.total_unlocks} unlocks. Joined ${timeAgo(l.created_at).toLowerCase()}.</p>
+          </div>
+        </div>
+        <div class="admin-contact-row"><i class="ti ti-mail"></i> ${escHtml(l.email || '')}</div>
+        ${l.phone ? `<div class="admin-contact-row"><i class="ti ti-phone"></i> ${escHtml(l.phone)}</div>` : ''}
+        ${l.id_number ? `<div class="admin-contact-row"><i class="ti ti-id"></i> ID ${escHtml(l.id_number)}</div>` : ''}
+        ${l.location ? `<div class="admin-contact-row"><i class="ti ti-map-pin"></i> ${escHtml(l.location)}</div>` : ''}
+        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+          <button class="btn-outline btn-xs" onclick="Pages._adminLandlord('${jsStr(l.id)}')">See listings</button>
+          <button class="btn-danger btn-xs" onclick="quickSuspend('${jsStr(l.id)}')"><i class="ti ti-user-off"></i> Suspend</button>
+        </div>
+      </div>`;
     }
 
     function renderTab() {
-      var tc = el('admin-tab-content');
+      const tc = el('admin-tab-content');
       if (!tc) return;
       if (activeTab === 'listings') {
-        if (listings.length === 0) {
-          tc.innerHTML = '<p style="color:var(--text-3);font-size:13px;padding:20px 0;text-align:center">No listings yet.</p>';
-        } else {
-          tc.innerHTML = listings.map(adminListingRow).join('');
-        }
+        tc.innerHTML = listings.length ? listings.map(adminListingRow).join('') : '<p class="text-muted" style="padding:24px 0">No listings yet.</p>';
       } else {
-        if (landlords.length === 0) {
-          tc.innerHTML = '<p style="color:var(--text-3);font-size:13px;padding:20px 0;text-align:center">No landlords registered yet.</p>';
-        } else {
-          tc.innerHTML = landlords.map(adminLandlordCard).join('');
-        }
+        tc.innerHTML = landlords.length ? landlords.map(adminLandlordCard).join('') : '<p class="text-muted" style="padding:24px 0">No landlords have signed up yet.</p>';
       }
     }
 
@@ -1214,19 +1286,18 @@ const Pages = (() => {
     <div class="dash-layout">
       ${dashSidebarHTML('admin', user)}
       <div class="dash-content">
-        <div class="page-header">
-          <h1><i class="ti ti-shield" style="color:var(--orange)"></i> Admin panel</h1>
-        </div>
-        <div class="admin-stats" style="margin-top:16px">
-          <div class="admin-stat"><strong>${stats.active_listings||0}</strong><span>Active listings</span></div>
-          <div class="admin-stat"><strong>${stats.total_listings||0}</strong><span>Total listings</span></div>
+        <div class="page-header"><h1>Admin</h1></div>
+        <p class="page-lede">Everything on MyNyumba, across all landlords.</p>
+        <div class="admin-stats">
+          <div class="admin-stat"><strong>${stats.active_listings||0}</strong><span>Live listings</span></div>
+          <div class="admin-stat"><strong>${stats.total_listings||0}</strong><span>All listings</span></div>
           <div class="admin-stat"><strong>${stats.landlords||0}</strong><span>Landlords</span></div>
           <div class="admin-stat"><strong>${stats.tenants||0}</strong><span>Tenants</span></div>
-          <div class="admin-stat"><strong>${stats.total_unlocks||0}</strong><span>Total unlocks</span></div>
+          <div class="admin-stat"><strong>${stats.total_unlocks||0}</strong><span>Paid unlocks</span></div>
         </div>
-        <div class="admin-tabs">
-          <button class="admin-tab active" id="tab-listings" onclick="switchAdminTab('listings')"><i class="ti ti-building"></i> All listings (${listings.length})</button>
-          <button class="admin-tab" id="tab-landlords" onclick="switchAdminTab('landlords')"><i class="ti ti-users"></i> Landlords (${landlords.length})</button>
+        <div class="admin-tabs" role="tablist">
+          <button class="admin-tab active" id="tab-listings" role="tab" onclick="switchAdminTab('listings')">Listings (${listings.length})</button>
+          <button class="admin-tab" id="tab-landlords" role="tab" onclick="switchAdminTab('landlords')">Landlords (${landlords.length})</button>
         </div>
         <div id="admin-tab-content"></div>
       </div>
@@ -1234,32 +1305,33 @@ const Pages = (() => {
 
     window.switchAdminTab = function(tab) {
       activeTab = tab;
-      document.querySelectorAll('.admin-tab').forEach(function(t) { t.classList.remove('active'); });
-      var tabEl = el('tab-' + tab);
+      document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+      const tabEl = el('tab-' + tab);
       if (tabEl) tabEl.classList.add('active');
       renderTab();
     };
     window.adminDeleteListing = async function(id) {
-      if (!confirm('Delete this listing permanently? This cannot be undone.')) return;
-      var r = await API.deleteListing(id);
+      if (!confirm('Delete this listing for good? You can\'t undo this.')) return;
+      const r = await API.deleteListing(id);
       if (r.ok) { showToast('Listing deleted.', 'success'); Router.go('admin'); }
-      else showToast(r.data.error || 'Delete failed.', 'error');
+      else showToast(r.data.error || 'Couldn\'t delete it. Try again.', 'error');
     };
-    window.quickSuspend = async function(lid) {
-      if (!confirm('Suspend this landlord and deactivate all their listings?')) return;
-      var r = await API.adminSuspendLandlord(lid);
+    window.quickSuspend = async function(llid) {
+      if (!confirm('Suspend this landlord and hide all their listings?')) return;
+      const r = await API.adminSuspendLandlord(llid);
       if (r.ok) { showToast(r.data.message, 'success'); Router.go('admin'); }
-      else showToast(r.data.error || 'Failed.', 'error');
+      else showToast(r.data.error || 'That didn\'t work. Try again.', 'error');
     };
     renderTab();
   }
 
-  function scrollToHow() {
-    Router.go('home');
-    setTimeout(() => {
+  async function scrollToHow() {
+    if (!document.getElementById('how-it-works')) await home();
+    history.replaceState({ route: 'how', params: {} }, '', '/#how-it-works');
+    requestAnimationFrame(() => {
       const howEl = document.getElementById('how-it-works');
       if (howEl) howEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 500);
+    });
   }
 
   // Expose adminLandlord so onclick in HTML strings can reach it
