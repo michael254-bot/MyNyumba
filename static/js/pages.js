@@ -65,16 +65,12 @@ const Pages = (() => {
 
   /* ── Home hero: full-width room photos that crossfade behind the text ── */
   const HERO_SLIDES = [
-    // [file, label, focal point, source wide enough for big screens?]
+    // Only photos that stay sharp full-width and keep the white text easy to read.
+    // [file, label, focal point, sharp on big screens?]
     ['1-sitting-room',   'Sitting room',   '50% 55%', true],
     ['2-living-room',    'Living room',    '50% 50%', true],
     ['3-reading-corner', 'Reading corner', '62% 50%', true],
-    ['4-lounge',         'Lounge',         '50% 60%', false],
-    ['5-bedroom',        'Bedroom',        '45% 55%', false],
-    ['6-dining',         'Dining area',    '50% 55%', true],
   ];
-  // The lounge and bedroom photos are only 500px wide, so they'd look blurry stretched
-  // across a laptop screen. Big screens use the four sharp photos; phones get all six.
   const heroSet = () => HERO_SLIDES.map((s, i) => i).filter(i => HERO_SLIDES[i][3] || window.innerWidth <= 700);
 
   function heroSlidesHTML() {
