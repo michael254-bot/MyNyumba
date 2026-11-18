@@ -63,6 +63,125 @@ const Pages = (() => {
     return [area, county].filter(Boolean).map(escHtml).join(', ');
   }
 
+  /* ── Home hero: a fan of room photos that turns slowly ── */
+  const HERO_PHOTOS = [
+    ['2-sitting-orange', 'Sitting room',    'Sitting room with an orange sofa, a round mirror and a patterned rug'],
+    ['3-bedroom',        'Bedroom',          'Bedroom with a grey upholstered bed and city views'],
+    ['4-lounge',         'Lounge',           'Lounge with a large corner sofa and double-height windows'],
+    ['5-living',         'Living room',      'Living room with white sofas, a fireplace and built-in shelves'],
+    ['6-reading-corner', 'Reading corner',   'Reading corner with a yellow armchair and wooden floor'],
+  ];
+
+  function heroFanHTML() {
+    return `<div class="hero-fan is-intro" id="hero-fan" role="group" aria-roledescription="carousel" aria-label="Example rooms">
+        ${HERO_PHOTOS.map(([file, label, alt], i) => `<button type="button" class="fan-card" data-i="${i}" aria-label="Show ${label}" tabindex="${i === 0 ? 0 : -1}">
+          <picture>
+            <source type="image/avif" srcset="/static/img/hero/${file}.avif"/>
+            <img src="/static/img/hero/${file}.webp" alt="${alt}" width="600" height="800" decoding="async" ${i < 3 || i === HERO_PHOTOS.length - 1 ? 'fetchpriority="' + (i === 0 ? 'high' : 'auto') + '"' : 'loading="lazy"'}/>
+          </picture>
+        </button>`).join('')}
+      </div>
+      <p class="fan-caption" id="fan-caption" aria-live="polite">${HERO_PHOTOS[0][1]}</p>`;
+  }
+
+  const HeroFan = (() => {
+    let active = 0, timer = null, visible = true, hovering = false, io = null;
+    const STEP_MS = 4500, MOVE_MS = 800;
+    const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    function slotOf(i, n) {
+      const rel = (i - active + n) % n;           // 0 = centre, 1 = right, n-1 = left
+      return rel <= Math.floor((n - 1) / 2) ? rel : rel - n;
+    }
+
+    function setSlot(c, slot, animate) {
+      if (!animate) { c.classList.add('no-anim'); c.dataset.slot = String(slot); void c.offsetWidth; c.classList.remove('no-anim'); }
+      else c.dataset.slot = String(slot);
+    }
+
+    function layout(prevSlots) {
+      const fan = el('hero-fan'); if (!fan) return;
+      const cards = [...fan.querySelectorAll('.fan-card:not(.is-leaving)')];
+      const n = cards.length;
+      cards.forEach((c, i) => {
+        const slot = slotOf(+c.dataset.i, n);
+        const prev = prevSlots ? prevSlots[i] : slot;
+        if (prevSlots && Math.abs(slot - prev) > 1) {
+          // Wrap-around. A copy carries on off the edge it was heading to while the
+          // card itself comes in from the opposite edge, so nothing crosses the fan.
+          const forward = slot > prev;
+          const ghost = c.cloneNode(true);
+          ghost.classList.add('is-leaving'); ghost.removeAttribute('id'); ghost.tabIndex = -1; ghost.setAttribute('aria-hidden', 'true');
+          fan.appendChild(ghost);
+          setSlot(ghost, prev, false);
+          requestAnimationFrame(() => setSlot(ghost, forward ? prev - 1 : prev + 1, true));
+          setTimeout(() => ghost.remove(), MOVE_MS + 50);
+          setSlot(c, forward ? slot + 1 : slot - 1, false);
+          requestAnimationFrame(() => requestAnimationFrame(() => setSlot(c, slot, true)));
+        } else {
+          setSlot(c, slot, !!prevSlots);
+        }
+        c.tabIndex = slot === 0 ? 0 : -1;
+        c.setAttribute('aria-current', slot === 0 ? 'true' : 'false');
+      });
+      const cap = el('fan-caption');
+      if (cap && prevSlots) { cap.classList.add('is-changing'); setTimeout(() => { cap.textContent = HERO_PHOTOS[active][1]; cap.classList.remove('is-changing'); }, 250); }
+    }
+
+    function go(to) {
+      const fan = el('hero-fan'); if (!fan) return stop();
+      const n = HERO_PHOTOS.length;
+      const prev = [...fan.querySelectorAll('.fan-card:not(.is-leaving)')].map(c => slotOf(+c.dataset.i, n));
+      active = ((to % n) + n) % n;
+      layout(prev);
+    }
+
+    function tick() {
+      if (!el('hero-fan')) return stop();
+      if (visible && !hovering && !document.hidden) go(active + 1);
+    }
+
+    function start() {
+      stop();
+      active = 0;
+      const fan = el('hero-fan'); if (!fan) return;
+      layout(null);
+      // One entrance: cards rise from the centre and fan out
+      if (reduced()) { fan.classList.remove('is-intro'); fan.classList.add('is-settled'); }
+      else {
+        requestAnimationFrame(() => requestAnimationFrame(() => fan.classList.remove('is-intro')));
+        setTimeout(() => fan.classList.add('is-settled'), 1300);
+      }
+      fan.addEventListener('click', e => {
+        const card = e.target.closest('.fan-card'); if (!card || card.classList.contains('is-leaving')) return;
+        const i = +card.dataset.i;
+        if (i !== active) { go(i); restart(); }
+      });
+      fan.addEventListener('mouseenter', () => { hovering = true; });
+      fan.addEventListener('mouseleave', () => { hovering = false; });
+      fan.addEventListener('focusin', () => { hovering = true; });
+      fan.addEventListener('focusout', () => { hovering = false; });
+      fan.addEventListener('keydown', e => {
+        if (e.key === 'ArrowRight') { go(active + 1); restart(); e.preventDefault(); fan.querySelector('[data-slot="0"]').focus(); }
+        if (e.key === 'ArrowLeft')  { go(active - 1); restart(); e.preventDefault(); fan.querySelector('[data-slot="0"]').focus(); }
+      });
+      let x0 = null;
+      fan.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; }, { passive: true });
+      fan.addEventListener('touchend', e => {
+        if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0; x0 = null;
+        if (Math.abs(dx) > 40) { go(active + (dx < 0 ? 1 : -1)); restart(); }
+      });
+      if ('IntersectionObserver' in window) {
+        io = new IntersectionObserver(([en]) => { visible = en.isIntersecting; }, { threshold: 0.2 });
+        io.observe(fan);
+      }
+      if (!reduced()) timer = setInterval(tick, STEP_MS);
+    }
+    function restart() { if (timer) { clearInterval(timer); timer = setInterval(tick, STEP_MS); } }
+    function stop() { if (timer) clearInterval(timer); timer = null; if (io) io.disconnect(); io = null; }
+    return { start, stop };
+  })();
+
   /* ── Shared: listing tile ── */
   function listingCard(l, showUnlocked = false) {
     const extras = [];
@@ -244,6 +363,7 @@ const Pages = (() => {
            ['furnished=true','Furnished'],['dsq=true','DSQ'],['pet_friendly=true','Pets allowed']]
           .map(([f,l]) => `<button type="button" class="ftag" data-filter="${f}">${l}</button>`).join('')}
       </div>
+      ${heroFanHTML()}
       <div class="hero-stats" id="hero-stats">
         <span class="h-stat"><strong id="stat-total">&nbsp;</strong></span>
         <span class="h-stat"><strong>47</strong> counties</span>
@@ -286,6 +406,7 @@ const Pages = (() => {
     </section>
     ${footerHTML()}`;
 
+    HeroFan.start();
     el('home-filters').addEventListener('click', e => {
       const tag = e.target.closest('.ftag');
       if (!tag) return;
@@ -306,7 +427,8 @@ const Pages = (() => {
     const topCounties = [...counties].sort((a,b) => b.listing_count - a.listing_count).slice(0, 12);
 
     const st = el('stat-total');
-    if (st) st.parentElement.innerHTML = `<strong>${Number(total).toLocaleString()}</strong> house${total!==1?'s':''} listed`;
+    // Only show the count once it's big enough to help rather than undercut "anywhere in Kenya"
+    if (st) { if (total >= 50) st.parentElement.innerHTML = `<strong>${Number(total).toLocaleString()}</strong> houses listed`; else st.parentElement.remove(); }
     const cb = el('home-counties');
     if (cb) cb.innerHTML = topCounties.filter(c => c.listing_count > 0).slice(0, 8).map(c=>`<button onclick="Router.go('browse',{county:'${jsStr(c.slug)}'})">${escHtml(c.name)}</button>`).join('')
       + `<button onclick="Router.go('counties')">All counties</button>`;
