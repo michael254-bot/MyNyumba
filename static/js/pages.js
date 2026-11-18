@@ -63,119 +63,79 @@ const Pages = (() => {
     return [area, county].filter(Boolean).map(escHtml).join(', ');
   }
 
-  /* ── Home hero: a fan of room photos that turns slowly ── */
-  const HERO_PHOTOS = [
-    ['2-sitting-orange', 'Sitting room',    'Sitting room with an orange sofa, a round mirror and a patterned rug'],
-    ['3-bedroom',        'Bedroom',          'Bedroom with a grey upholstered bed and city views'],
-    ['4-lounge',         'Lounge',           'Lounge with a large corner sofa and double-height windows'],
-    ['5-living',         'Living room',      'Living room with white sofas, a fireplace and built-in shelves'],
-    ['6-reading-corner', 'Reading corner',   'Reading corner with a yellow armchair and wooden floor'],
+  /* ── Home hero: full-width room photos that crossfade behind the text ── */
+  const HERO_SLIDES = [
+    // [file, label, focal point, source wide enough for big screens?]
+    ['1-sitting-room',   'Sitting room',   '50% 55%', true],
+    ['2-living-room',    'Living room',    '50% 50%', true],
+    ['3-reading-corner', 'Reading corner', '62% 50%', true],
+    ['4-lounge',         'Lounge',         '50% 60%', false],
+    ['5-bedroom',        'Bedroom',        '45% 55%', false],
+    ['6-dining',         'Dining area',    '50% 55%', true],
   ];
+  // The lounge and bedroom photos are only 500px wide, so they'd look blurry stretched
+  // across a laptop screen. Big screens use the four sharp photos; phones get all six.
+  const heroSet = () => HERO_SLIDES.map((s, i) => i).filter(i => HERO_SLIDES[i][3] || window.innerWidth <= 700);
 
-  function heroFanHTML() {
-    return `<div class="hero-fan is-intro" id="hero-fan" role="group" aria-roledescription="carousel" aria-label="Example rooms">
-        ${HERO_PHOTOS.map(([file, label, alt], i) => `<button type="button" class="fan-card" data-i="${i}" aria-label="Show ${label}" tabindex="${i === 0 ? 0 : -1}">
-          <picture>
-            <source type="image/avif" srcset="/static/img/hero/${file}.avif"/>
-            <img src="/static/img/hero/${file}.webp" alt="${alt}" width="600" height="800" decoding="async" ${i < 3 || i === HERO_PHOTOS.length - 1 ? 'fetchpriority="' + (i === 0 ? 'high' : 'auto') + '"' : 'loading="lazy"'}/>
-          </picture>
-        </button>`).join('')}
-      </div>
-      <p class="fan-caption" id="fan-caption" aria-live="polite">${HERO_PHOTOS[0][1]}</p>`;
+  function heroSlidesHTML() {
+    const dir = '/static/img/hero-bg/';
+    return HERO_SLIDES.map(([f, , pos, wide], i) => {
+      // Only the first photo loads with the page; the rest load once the page is idle
+      const a = i === 0 ? 'srcset' : 'data-srcset';
+      return `<picture class="hero-slide ${i === 0 ? 'is-active' : ''} ${wide ? '' : 'is-small'}" data-i="${i}">
+          <source media="(max-width: 700px)" type="image/avif" ${a}="${dir}${f}-m.avif"/>
+          <source media="(max-width: 700px)" type="image/webp" ${a}="${dir}${f}-m.webp"/>
+          <source type="image/avif" ${a}="${dir}${f}.avif"/>
+          <img ${i === 0 ? `src="${dir}${f}.webp" fetchpriority="high"` : `data-src="${dir}${f}.webp"`} alt="" decoding="async" style="object-position:${pos}"/>
+        </picture>`;
+    }).join('');
   }
 
-  const HeroFan = (() => {
-    let active = 0, timer = null, visible = true, hovering = false, io = null;
-    const STEP_MS = 4500, MOVE_MS = 800;
+  const HeroSlider = (() => {
+    let active = 0, timer = null, visible = true, io = null;
+    const STEP_MS = 6000;
     const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    function slotOf(i, n) {
-      const rel = (i - active + n) % n;           // 0 = centre, 1 = right, n-1 = left
-      return rel <= Math.floor((n - 1) / 2) ? rel : rel - n;
+    function hydrate() {
+      document.querySelectorAll('.hero-slide [data-srcset]').forEach(s => { s.srcset = s.dataset.srcset; s.removeAttribute('data-srcset'); });
+      document.querySelectorAll('.hero-slide img[data-src]').forEach(i => { i.src = i.dataset.src; i.removeAttribute('data-src'); });
     }
 
-    function setSlot(c, slot, animate) {
-      if (!animate) { c.classList.add('no-anim'); c.dataset.slot = String(slot); void c.offsetWidth; c.classList.remove('no-anim'); }
-      else c.dataset.slot = String(slot);
-    }
-
-    function layout(prevSlots) {
-      const fan = el('hero-fan'); if (!fan) return;
-      const cards = [...fan.querySelectorAll('.fan-card:not(.is-leaving)')];
-      const n = cards.length;
-      cards.forEach((c, i) => {
-        const slot = slotOf(+c.dataset.i, n);
-        const prev = prevSlots ? prevSlots[i] : slot;
-        if (prevSlots && Math.abs(slot - prev) > 1) {
-          // Wrap-around. A copy carries on off the edge it was heading to while the
-          // card itself comes in from the opposite edge, so nothing crosses the fan.
-          const forward = slot > prev;
-          const ghost = c.cloneNode(true);
-          ghost.classList.add('is-leaving'); ghost.removeAttribute('id'); ghost.tabIndex = -1; ghost.setAttribute('aria-hidden', 'true');
-          fan.appendChild(ghost);
-          setSlot(ghost, prev, false);
-          requestAnimationFrame(() => setSlot(ghost, forward ? prev - 1 : prev + 1, true));
-          setTimeout(() => ghost.remove(), MOVE_MS + 50);
-          setSlot(c, forward ? slot + 1 : slot - 1, false);
-          requestAnimationFrame(() => requestAnimationFrame(() => setSlot(c, slot, true)));
-        } else {
-          setSlot(c, slot, !!prevSlots);
-        }
-        c.tabIndex = slot === 0 ? 0 : -1;
-        c.setAttribute('aria-current', slot === 0 ? 'true' : 'false');
+    // active = position in the current set (4 photos on big screens, 6 on phones)
+    function show(pos) {
+      const slides = document.querySelectorAll('.hero-slide');
+      const dots = document.querySelectorAll('.hero-dot');
+      if (!slides.length) return stop();
+      const set = heroSet();
+      active = (pos + set.length) % set.length;
+      const idx = set[active];
+      slides.forEach(s => s.classList.toggle('is-active', +s.dataset.i === idx));
+      dots.forEach(d => {
+        const on = +d.dataset.i === idx;
+        d.classList.remove('is-active'); d.setAttribute('aria-current', on ? 'true' : 'false');
+        if (on) { void d.offsetWidth; d.classList.add('is-active'); }   // restart the progress bar
       });
-      const cap = el('fan-caption');
-      if (cap && prevSlots) { cap.classList.add('is-changing'); setTimeout(() => { cap.textContent = HERO_PHOTOS[active][1]; cap.classList.remove('is-changing'); }, 250); }
-    }
-
-    function go(to) {
-      const fan = el('hero-fan'); if (!fan) return stop();
-      const n = HERO_PHOTOS.length;
-      const prev = [...fan.querySelectorAll('.fan-card:not(.is-leaving)')].map(c => slotOf(+c.dataset.i, n));
-      active = ((to % n) + n) % n;
-      layout(prev);
+      const room = el('hero-room'); if (room) room.textContent = HERO_SLIDES[idx][1];
     }
 
     function tick() {
-      if (!el('hero-fan')) return stop();
-      if (visible && !hovering && !document.hidden) go(active + 1);
+      if (!el('hero')) return stop();
+      if (visible && !document.hidden) show(active + 1);
     }
 
     function start() {
-      stop();
-      active = 0;
-      const fan = el('hero-fan'); if (!fan) return;
-      layout(null);
-      // One entrance: cards rise from the centre and fan out
-      if (reduced()) { fan.classList.remove('is-intro'); fan.classList.add('is-settled'); }
-      else {
-        requestAnimationFrame(() => requestAnimationFrame(() => fan.classList.remove('is-intro')));
-        setTimeout(() => fan.classList.add('is-settled'), 1300);
-      }
-      fan.addEventListener('click', e => {
-        const card = e.target.closest('.fan-card'); if (!card || card.classList.contains('is-leaving')) return;
-        const i = +card.dataset.i;
-        if (i !== active) { go(i); restart(); }
-      });
-      fan.addEventListener('mouseenter', () => { hovering = true; });
-      fan.addEventListener('mouseleave', () => { hovering = false; });
-      fan.addEventListener('focusin', () => { hovering = true; });
-      fan.addEventListener('focusout', () => { hovering = false; });
-      fan.addEventListener('keydown', e => {
-        if (e.key === 'ArrowRight') { go(active + 1); restart(); e.preventDefault(); fan.querySelector('[data-slot="0"]').focus(); }
-        if (e.key === 'ArrowLeft')  { go(active - 1); restart(); e.preventDefault(); fan.querySelector('[data-slot="0"]').focus(); }
-      });
-      let x0 = null;
-      fan.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; }, { passive: true });
-      fan.addEventListener('touchend', e => {
-        if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0; x0 = null;
-        if (Math.abs(dx) > 40) { go(active + (dx < 0 ? 1 : -1)); restart(); }
-      });
+      stop(); active = 0;
+      const hero = el('hero'); if (!hero) return;
+      const go = () => setTimeout(hydrate, 300);
+      if (document.readyState === 'complete') go(); else window.addEventListener('load', go, { once: true });
+      document.querySelectorAll('.hero-dot').forEach(d => d.addEventListener('click', () => { show(heroSet().indexOf(+d.dataset.i)); restart(); }));
       if ('IntersectionObserver' in window) {
-        io = new IntersectionObserver(([en]) => { visible = en.isIntersecting; }, { threshold: 0.2 });
-        io.observe(fan);
+        io = new IntersectionObserver(([en]) => { visible = en.isIntersecting; hero.classList.toggle('is-paused', !visible); }, { threshold: 0.15 });
+        io.observe(hero);
       }
-      if (!reduced()) timer = setInterval(tick, STEP_MS);
+      if (reduced()) { hero.classList.add('is-still'); return; }
+      show(0);
+      timer = setInterval(tick, STEP_MS);
     }
     function restart() { if (timer) { clearInterval(timer); timer = setInterval(tick, STEP_MS); } }
     function stop() { if (timer) clearInterval(timer); timer = null; if (io) io.disconnect(); io = null; }
@@ -354,20 +314,29 @@ const Pages = (() => {
   ══════════════════════════════════════════════ */
   async function home() {
     app().innerHTML = `
-    <section class="hero">
-      <h1>Find a house to rent, anywhere in Kenya</h1>
-      <p class="hero-sub">Look through photos, rent and what's included for free. When you find the one, pay <strong>Ksh 500</strong> by M-Pesa to get the landlord's number.</p>
-      ${searchBoxHTML('home')}
-      <div class="filter-tags" id="home-filters" aria-label="Quick filters">
-        ${[['water=true','Water included'],['security=true','Security'],['parking=true','Parking'],['wifi=true','WiFi'],
-           ['furnished=true','Furnished'],['dsq=true','DSQ'],['pet_friendly=true','Pets allowed']]
-          .map(([f,l]) => `<button type="button" class="ftag" data-filter="${f}">${l}</button>`).join('')}
+    <section class="hero hero-bg" id="hero">
+      <div class="hero-slides" aria-hidden="true">${heroSlidesHTML()}</div>
+      <div class="hero-scrim" aria-hidden="true"></div>
+      <div class="hero-content">
+        <h1>Find a house to rent, anywhere in Kenya</h1>
+        <p class="hero-sub">Look through photos, rent and what's included for free. When you find the one, pay <strong>Ksh 500</strong> by M-Pesa to get the landlord's number.</p>
+        ${searchBoxHTML('home')}
+        <div class="filter-tags" id="home-filters" aria-label="Quick filters">
+          ${[['water=true','Water included'],['security=true','Security'],['parking=true','Parking'],['wifi=true','WiFi'],
+             ['furnished=true','Furnished'],['dsq=true','DSQ'],['pet_friendly=true','Pets allowed']]
+            .map(([f,l]) => `<button type="button" class="ftag" data-filter="${f}">${l}</button>`).join('')}
+        </div>
+        <div class="hero-stats" id="hero-stats">
+          <span class="h-stat"><strong id="stat-total">&nbsp;</strong></span>
+          <span class="h-stat"><strong>47</strong> counties</span>
+          <span class="h-stat"><strong>Ksh 500</strong> per landlord contact</span>
+        </div>
       </div>
-      ${heroFanHTML()}
-      <div class="hero-stats" id="hero-stats">
-        <span class="h-stat"><strong id="stat-total">&nbsp;</strong></span>
-        <span class="h-stat"><strong>47</strong> counties</span>
-        <span class="h-stat"><strong>Ksh 500</strong> per landlord contact</span>
+      <div class="hero-meta">
+        <span id="hero-room" aria-live="off">${HERO_SLIDES[0][1]}</span>
+        <div class="hero-dots" role="group" aria-label="Background photos">
+          ${HERO_SLIDES.map(([, label, , wide], i) => `<button type="button" class="hero-dot ${i === 0 ? 'is-active' : ''} ${wide ? '' : 'is-small'}" data-i="${i}" aria-label="Show ${label}" aria-current="${i === 0}"><i></i></button>`).join('')}
+        </div>
       </div>
     </section>
 
@@ -406,7 +375,7 @@ const Pages = (() => {
     </section>
     ${footerHTML()}`;
 
-    HeroFan.start();
+    HeroSlider.start();
     el('home-filters').addEventListener('click', e => {
       const tag = e.target.closest('.ftag');
       if (!tag) return;
