@@ -201,42 +201,40 @@ select{appearance:none;-webkit-appearance:none;background-image:url("data:image/
 .hero-compact{padding:64px var(--gutter) 40px}
 .hero-compact h1{font-size:clamp(34px,4.6vw,52px)}
 
-/* ── Hero photo fan ──────────────────────────── */
-.hero{padding-bottom:56px;overflow-x:clip}
-.hero-fan{--w:340px;--gap:293px;--gap2:494px;position:relative;height:calc(var(--w) * 4 / 3);max-width:var(--max);margin:44px auto 0;perspective:1200px}
-.fan-card{position:absolute;left:50%;top:0;width:var(--w);aspect-ratio:3/4;margin-left:calc(var(--w) / -2);padding:0;border:none;background:var(--pebble);border-radius:var(--r-card);overflow:hidden;cursor:pointer;
-  transition:transform .8s cubic-bezier(.22,.61,.36,1),opacity .8s ease;transform-origin:50% 100%;will-change:transform}
-.fan-card picture,.fan-card img{display:block;width:100%;height:100%}
-.fan-card img{object-fit:cover;transition:transform 4.6s linear}
-.fan-card[data-slot="0"]{transform:translateX(0) scale(1);z-index:5;cursor:default}
-.fan-card[data-slot="0"] img{transform:scale(1.06)}
-.fan-card[data-slot="1"]{transform:translateX(var(--gap)) scale(.64);z-index:4}
-.fan-card[data-slot="-1"]{transform:translateX(calc(var(--gap) * -1)) scale(.64);z-index:4}
-.fan-card[data-slot="2"]{transform:translateX(var(--gap2)) scale(.46);z-index:3}
-.fan-card[data-slot="-2"]{transform:translateX(calc(var(--gap2) * -1)) scale(.46);z-index:3}
-.fan-card[data-slot="3"]{transform:translateX(calc(var(--gap2) + var(--w) * .5)) scale(.36);opacity:0;z-index:2;pointer-events:none}
-.fan-card[data-slot="-3"]{transform:translateX(calc((var(--gap2) + var(--w) * .5) * -1)) scale(.36);opacity:0;z-index:2;pointer-events:none}
-.fan-card.no-anim{transition:none!important}
-.fan-card.is-leaving{pointer-events:none;z-index:1}
-.hero-fan:not(.is-settled) .fan-card{transition:transform .9s cubic-bezier(.22,.61,.36,1),opacity .35s ease}
-.fan-card:not([data-slot="0"]):hover{filter:brightness(1.04)}
-.fan-card:focus-visible{outline:2px solid var(--ink);outline-offset:4px}
-/* entrance: everything starts stacked in the centre, then fans out once */
-.hero-fan.is-intro .fan-card{transform:translateY(14%) scale(.82)!important;opacity:0}
-.hero-fan .fan-card{transition-delay:0s}
-.hero-fan:not(.is-intro) .fan-card[data-slot="0"]{transition-delay:0s}
-.hero-fan:not(.is-intro) .fan-card[data-slot="1"],.hero-fan:not(.is-intro) .fan-card[data-slot="-1"]{transition-delay:.07s}
-.hero-fan:not(.is-intro) .fan-card[data-slot="2"],.hero-fan:not(.is-intro) .fan-card[data-slot="-2"]{transition-delay:.14s}
-.hero-fan.is-settled .fan-card{transition-delay:0s!important}
-.fan-caption{margin-top:20px;font-size:15px;font-weight:500;color:var(--ink);transition:opacity .25s ease}
-.fan-caption.is-changing{opacity:0}
-@media (prefers-reduced-motion:reduce){.fan-card,.fan-card img,.fan-caption{transition:none!important}.fan-card[data-slot="0"] img{transform:none}}
-@media(max-width:1120px){.hero-fan{--w:300px;--gap:260px;--gap2:439px}}
-@media(max-width:900px){.hero-fan{--w:240px;--gap:211px;--gap2:357px;margin-top:40px}}
-@media(max-width:560px){
-  .hero-fan{--w:58vw;--gap:51vw;--gap2:84vw;margin-top:32px}
-  .fan-card[data-slot="2"],.fan-card[data-slot="-2"]{opacity:0;pointer-events:none}
-}
+/* ── Hero: photos crossfading behind the text ── */
+.hero.hero-bg{position:relative;overflow:hidden;isolation:isolate;min-height:calc(100vh - var(--nav-h));min-height:calc(100svh - var(--nav-h));display:flex;flex-direction:column;justify-content:center;padding:88px var(--gutter) 112px;background:#2f2f2f;color:#fff}
+.hero-slides,.hero-slide,.hero-scrim{position:absolute;inset:0}
+.hero-slides{z-index:-2}
+.hero-slide{opacity:0;transition:opacity 1.4s ease}
+.hero-slide.is-active{opacity:1}
+.hero-slide img{width:100%;height:100%;object-fit:cover;transform:scale(1.02)}
+.hero-slide.is-active img{animation:heroZoom 7.5s linear forwards}
+.hero-slide.is-small.is-active img{animation:none}
+@media(min-width:701px){.hero-slide.is-small,.hero-dot.is-small{display:none}}
+@keyframes heroZoom{from{transform:scale(1.01)}to{transform:scale(1.06)}}
+.hero-scrim{z-index:-1;background:radial-gradient(ellipse 62% 56% at 50% 46%,rgba(20,20,20,.6) 0%,rgba(20,20,20,.4) 62%,rgba(20,20,20,.14) 100%),linear-gradient(180deg,rgba(20,20,20,.25) 0%,rgba(20,20,20,0) 30%,rgba(20,20,20,0) 72%,rgba(20,20,20,.5) 100%)}
+.hero-content{position:relative;max-width:var(--max);margin:0 auto;width:100%}
+.hero-bg h1{color:#fff}
+.hero-bg .hero-sub{color:rgba(255,255,255,.9)}
+.hero-bg .hero-sub strong{color:#fff}
+.hero-bg .search-box{border-color:transparent}
+.hero-bg .ftag{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.55);color:#fff}
+.hero-bg .ftag:hover{background:#fff;border-color:#fff;color:var(--ink)}
+.hero-bg .hero-stats{color:rgba(255,255,255,.82);margin-top:36px}
+.hero-bg .h-stat strong{color:#fff}
+.hero-meta{position:absolute;left:0;right:0;bottom:24px;max-width:calc(var(--max) - 2 * var(--gutter));margin:0 auto;padding:0 var(--gutter);display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:14px;font-weight:500;color:rgba(255,255,255,.9)}
+.hero-dots{display:flex;gap:6px}
+.hero-dot{background:none;border:none;padding:10px 0;width:32px;cursor:pointer}
+.hero-dot i{display:block;height:4px;border-radius:2px;background:rgba(255,255,255,.45);overflow:hidden;position:relative}
+.hero-dot i::after{content:"";position:absolute;inset:0;background:#fff;transform:scaleX(0);transform-origin:left}
+.hero-dot.is-active i::after{animation:heroBar 6s linear forwards}
+.hero-bg.is-paused .hero-dot.is-active i::after,.hero-bg.is-paused .hero-slide.is-active img{animation-play-state:paused}
+.hero-bg.is-still .hero-dot.is-active i::after{animation:none;transform:scaleX(1)}
+.hero-dot:focus-visible{outline:2px solid #fff;outline-offset:2px}
+@keyframes heroBar{to{transform:scaleX(1)}}
+@media (prefers-reduced-motion:reduce){.hero-slide{transition:none}.hero-slide.is-active img{animation:none}.hero-dot.is-active i::after{animation:none;transform:scaleX(1)}}
+@media(max-width:900px){.hero.hero-bg{padding:40px var(--gutter) 96px}.hero-bg .filter-tags{-webkit-mask-image:linear-gradient(90deg,#000 85%,transparent);mask-image:linear-gradient(90deg,#000 85%,transparent)}.hero-bg .hero-stats{margin-top:28px}.hero-scrim{background:linear-gradient(180deg,rgba(20,20,20,.55) 0%,rgba(20,20,20,.5) 60%,rgba(20,20,20,.62) 100%)}}
+@media(max-width:560px){.hero-meta{bottom:20px;font-size:13px}.hero-dot{width:22px}}
 
 /* ── Chip rows (counties / areas) ────────────── */
 .counties-bar{max-width:var(--max);margin:0 auto;padding:0 var(--gutter);display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
