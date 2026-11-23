@@ -244,7 +244,7 @@ const Pages = (() => {
       <div class="footer-inner">
         <div class="footer-top">
           <div class="footer-brand">
-            <a href="/" class="logo" onclick="Router.go('home');return false;"><span class="logo-my">my</span>nyumba</a>
+            <a href="/" class="logo" onclick="Router.go('home');return false;" aria-label="MyNyumba home"><svg class="logo-mark" viewBox="0 0 256 256" aria-hidden="true" focusable="false"><rect width="256" height="256" rx="56" fill="#b30057"/><g fill="none" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 -6)"><path d="M58 124 L128 62 L198 124"/><path d="M76 198 V166 A26 26 0 0 1 128 166 V198 M128 166 A26 26 0 0 1 180 166 V198"/></g></svg><span class="logo-word"><span class="logo-my">my</span>nyumba</span></a>
             <p>Rental houses in all 47 counties. Browse for free and pay Ksh 500 only for the landlords you want to call.</p>
           </div>
           <div class="footer-links-group">
