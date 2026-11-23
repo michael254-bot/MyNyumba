@@ -12,7 +12,7 @@ import requests
 from datetime import datetime, timezone
 from functools import wraps
 
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify, session, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 import psycopg2
@@ -250,6 +250,22 @@ def _public_listing(row):
     return d
 
 # ── Page routes ──────────────────────────────────────────────────────────────
+# Browsers and Google ask for these at the site root, not under /static.
+@app.route("/favicon.ico")
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, "static"), "favicon.ico",
+                               mimetype="image/x-icon", max_age=60 * 60 * 24 * 7)
+
+@app.route("/apple-touch-icon.png")
+def apple_touch_icon():
+    return send_from_directory(os.path.join(app.root_path, "static", "img", "brand"), "apple-touch-icon.png",
+                               max_age=60 * 60 * 24 * 7)
+
+@app.route("/site.webmanifest")
+def webmanifest():
+    return send_from_directory(os.path.join(app.root_path, "static"), "site.webmanifest",
+                               mimetype="application/manifest+json", max_age=60 * 60 * 24)
+
 @app.route("/")
 @app.route("/<path:path>")
 def index(path=""):
